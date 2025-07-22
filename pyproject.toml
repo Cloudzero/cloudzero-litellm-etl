@@ -1,0 +1,46 @@
+[project]
+name = "ll2cz"
+version = "0.1.0"
+description = "Transform LiteLLM database data into CloudZero AnyCost CBF format"
+readme = "README.md"
+authors = [
+    { name = "Erik Peterson", email = "erik@cloudzero.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg2-binary>=2.9.0",
+    "polars>=0.20.0",
+    "httpx>=0.25.0",
+    "typer>=0.12.0",
+    "connectorx>=0.3.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0.0",
+]
+
+[project.scripts]
+ll2cz = "ll2cz:app"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "C"]
+ignore = ["E402", "E501", "B005", "B904", "C901", "C408"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9"]
+build-backend = "uv_build"
