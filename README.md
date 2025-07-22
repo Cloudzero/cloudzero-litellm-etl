@@ -58,57 +58,111 @@ CLI arguments always take priority over configuration file values:
 # Show version
 ll2cz --version
 
-# Show help (also shown when no options provided)
+# Show help
 ll2cz --help
 
 # Configuration management
-ll2cz config-example    # Create example config file
-ll2cz config-status     # Show current config status
+ll2cz config example     # Create example config file
+ll2cz config status      # Show current config status
+ll2cz config edit        # Interactively edit configuration
 ```
 
 ## Usage
 
+### Transform Mode
+
+Transform LiteLLM data to CloudZero CBF format:
+
+```bash
+# Display data on screen (formatted table)
+ll2cz transform --input "postgresql://user:pass@host:5432/litellm_db" --screen
+
+# Export to CSV file
+ll2cz transform --input "postgresql://user:pass@host:5432/litellm_db" --output data.csv
+
+# Limit records for screen display
+ll2cz transform --screen --limit 25
+```
+
+### Transmit Mode
+
+Send data directly to CloudZero AnyCost API:
+
+```bash
+# Send today's data
+ll2cz transmit day
+
+# Send specific day's data (DD-MM-YYYY format)
+ll2cz transmit day 15-01-2024
+
+# Send current month's data
+ll2cz transmit month
+
+# Send specific month's data (MM-YYYY format)
+ll2cz transmit month 01-2024
+
+# Send all available data (batched by day)
+ll2cz transmit all
+
+# Test mode - show payloads without sending (5 records only)
+ll2cz transmit day --test
+
+# Use append mode (sum operation instead of replace_hourly)
+ll2cz transmit day --append
+
+# Specify timezone for date handling
+ll2cz transmit day --timezone "US/Eastern"
+
+# Limit number of records to process
+ll2cz transmit month --limit 1000
+```
+
 ### Analysis Mode
 
-Inspect your LiteLLM data with beautifully formatted terminal output:
+Analyze your LiteLLM database data:
 
 ```bash
-# Analyze 100 recent records with rich formatting
-ll2cz --analysis 100
+# General data analysis
+ll2cz analyze data --limit 10000
 
-# Or with explicit database connection (overrides config file)
-ll2cz --input "postgresql://user:pass@host:5432/litellm_db" --analysis 100
+# Show raw table data
+ll2cz analyze data --show-raw --table all
 
-# Save analysis results to JSON
-ll2cz --analysis 100 --json analysis.json
+# Show specific table only
+ll2cz analyze data --show-raw --table user
+
+# CZRN (CloudZero Resource Name) analysis
+ll2cz analyze czrn --limit 10000
+
+# Spend analysis
+ll2cz analyze spend --limit 10000
+
+# Database schema analysis
+ll2cz analyze schema --output schema_docs.md
+
+# Force refresh cache
+ll2cz analyze data --force-refresh
+
+# Save analysis to JSON
+ll2cz analyze data --json analysis.json
 ```
 
-The analysis mode provides:
-- Color-coded tables showing data structure
-- Column statistics and top values
-- Data quality metrics
-- Rich terminal formatting for better readability
+### Cache Management
 
-### Export to CSV
+Manage local data cache for offline operation:
 
 ```bash
-# Export to CSV using config file database connection
-ll2cz --csv output.csv
+# Check cache status (local only)
+ll2cz cache status
 
-# Or with explicit database connection
-ll2cz --input "postgresql://user:pass@host:5432/litellm_db" --csv output.csv
-```
+# Check cache status with remote server verification
+ll2cz cache status --remote-check
 
-### Stream to CloudZero AnyCost API
+# Clear local cache
+ll2cz cache clear
 
-```bash
-# Stream to CloudZero using config file settings
-ll2cz
-
-# Or with explicit values (overrides config file)
-ll2cz --input "postgresql://user:pass@host:5432/litellm_db" \
-  --cz-api-key "your-cloudzero-api-key" \
-  --cz-connection-id "your-connection-id"
+# Force refresh cache from server
+ll2cz cache refresh
 ```
 
 ## Data Transformation
