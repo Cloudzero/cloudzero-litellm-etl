@@ -85,18 +85,19 @@ class TestCloudZeroStreamer:
             mock_client_class.return_value.__enter__.return_value = mock_client
             mock_client_class.return_value.__exit__.return_value = None
 
+            # Use current CBF format with namespaced fields
             data = pl.DataFrame([{
-                'timestamp': '2024-01-01T10:00:00Z',
-                'service': 'litellm',
-                'resource_id': 'req_123',
-                'cost': 0.002,
-                'usage_quantity': 150,
-                'usage_unit': 'tokens',
-                'dimensions': {'model': 'gpt-3.5-turbo'}
+                'time/usage_start': '2024-01-01T10:00:00Z',
+                'resource/service': 'litellm',
+                'resource/id': 'req_123',
+                'cost/cost': 0.002,
+                'usage/amount': 150,
+                'usage/units': 'tokens',
+                'resource/tag:model': 'gpt-3.5-turbo'
             }])
 
             streamer = CloudZeroStreamer('test-api-key', 'test-connection-id')
-            streamer.send(data)
+            streamer.send_batched(data)
 
             mock_client.post.assert_called_once()
             call_args = mock_client.post.call_args
@@ -106,7 +107,11 @@ class TestCloudZeroStreamer:
             assert 'test-connection-id' in call_args[0][0]
 
             payload = call_args[1]['json']
-            assert payload['service'] == 'litellm'
-            assert payload['resource_id'] == 'req_123'
-            assert payload['cost'] == 0.002
+            # Check the data array in the payload
+            data_records = payload['data']
+            assert len(data_records) == 1
+            record = data_records[0]
+            assert record['resource/service'] == 'litellm'
+            assert record['resource/id'] == 'req_123'
+            assert record['cost/cost'] == '0.002'  # CloudZero expects strings
 

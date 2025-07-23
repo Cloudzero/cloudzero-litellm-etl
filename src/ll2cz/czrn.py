@@ -45,18 +45,18 @@ class CZRNGenerator:
         service_type = 'litellm'
         provider = self._normalize_provider(row.get('custom_llm_provider', 'unknown'))
         region = 'cross-region'
-        
+
         # Use the actual entity_id (team_id or user_id) as the owner account
         entity_id = row.get('entity_id', 'unknown')
         owner_account_id = self._normalize_component(entity_id)
-        
+
         resource_type = 'llm-usage'
-        
+
         # Create a unique identifier with just the model (entity info already in owner_account_id)
         model = row.get('model', 'unknown')
-        
+
         cloud_local_id = model
-        
+
         return self.create_from_components(
             service_type=service_type,
             provider=provider,
@@ -83,12 +83,12 @@ class CZRNGenerator:
         owner_account_id = self._normalize_component(owner_account_id)
         resource_type = self._normalize_component(resource_type)
         # cloud_local_id can contain pipes and other characters, so don't normalize it
-        
+
         czrn = f"czrn:{service_type}:{provider}:{region}:{owner_account_id}:{resource_type}:{cloud_local_id}"
-        
+
         if not self.is_valid(czrn):
             raise ValueError(f"Generated CZRN is invalid: {czrn}")
-        
+
         return czrn
 
     def is_valid(self, czrn: str) -> bool:
@@ -103,7 +103,7 @@ class CZRNGenerator:
         match = self.CZRN_REGEX.match(czrn)
         if not match:
             raise ValueError(f"Invalid CZRN format: {czrn}")
-        
+
         return match.groups()
 
     def _normalize_provider(self, provider: str) -> str:
@@ -124,7 +124,7 @@ class CZRNGenerator:
             'together-ai': 'together-ai',
             'unknown': 'unknown'
         }
-        
+
         normalized = provider.lower().replace('_', '-')
         return provider_map.get(normalized, normalized)
 
@@ -132,19 +132,19 @@ class CZRNGenerator:
         """Normalize a CZRN component to meet format requirements."""
         if not component:
             return 'unknown'
-        
+
         # Convert to lowercase unless uppercase is allowed
         if not allow_uppercase:
             component = component.lower()
-        
+
         # Replace invalid characters with hyphens
         component = re.sub(r'[^a-zA-Z0-9-]', '-', component)
-        
+
         # Remove consecutive hyphens
         component = re.sub(r'-+', '-', component)
-        
+
         # Remove leading/trailing hyphens
         component = component.strip('-')
-        
+
         return component or 'unknown'
 

@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced transmission output to show API operation being used (`replace_hourly` or `sum`)
 - Improved date filter display to show human-readable description instead of raw JSON
 
+## [0.1.1] - 2025-01-23
+
+### Changed
+- Migrated from psycopg2-binary to psycopg[binary] (psycopg3) for improved performance and modern PostgreSQL features
+- Updated database connection type annotations to use psycopg.Connection
+- Updated all command default limits to 10,000 for consistent data loading behavior
+
 ## [0.1.0] - 2025-01-19
 
 ### Added

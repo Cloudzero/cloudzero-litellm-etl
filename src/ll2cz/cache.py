@@ -34,14 +34,14 @@ class DataCache:
     def __init__(self, cache_dir: Optional[Path] = None):
         """Initialize cache with specified directory."""
         self.console = Console()
-        
+
         if cache_dir is None:
             cache_dir = Path.home() / '.ll2cz' / 'cache'
-        
+
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cache_file = self.cache_dir / 'litellm_data.db'
-        
+
         self._init_cache_db()
 
     def _init_cache_db(self) -> None:
@@ -56,7 +56,7 @@ class DataCache:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
             # Consolidated data table (UNION of user, team, tag spend)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS consolidated_spend (
@@ -81,13 +81,13 @@ class DataCache:
                     PRIMARY KEY (id, entity_type)
                 )
             """)
-            
+
             # Create indexes for performance
             conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_type ON consolidated_spend(entity_type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON consolidated_spend(date)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_model ON consolidated_spend(model)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON consolidated_spend(custom_llm_provider)")
-            
+
             conn.commit()
         finally:
             conn.close()
@@ -133,18 +133,18 @@ class DataCache:
         try:
             # Get current server table info
             server_info = database.get_table_info()
-            
+
             # Get server record counts and max timestamps
             server_stats = {
                 'total_records': server_info['row_count'],
                 'table_breakdown': server_info['table_breakdown'],
                 'check_time': datetime.now().isoformat()
             }
-            
+
             # Try to get more detailed freshness info (latest timestamps)
             try:
                 conn = database.connect()
-                
+
                 # Get latest created_at from each table
                 latest_timestamps = {}
                 for table_type in ['user', 'team', 'tag']:
@@ -158,16 +158,16 @@ class DataCache:
                     except Exception:
                         # Table might be empty or not exist
                         latest_timestamps[table_type] = None
-                
+
                 server_stats['latest_timestamps'] = latest_timestamps
                 conn.close()
-                
+
             except Exception:
                 # Fallback if detailed timestamp query fails
                 server_stats['latest_timestamps'] = {}
-            
+
             return server_stats
-            
+
         except Exception as e:
             # Server unavailable
             return {
@@ -181,44 +181,44 @@ class DataCache:
         if server_stats.get('server_available', True) is False:
             # Server unavailable, consider cache fresh (offline mode)
             return True
-        
+
         conn_hash = self._get_connection_hash(connection_string)
         cache_key = f"server_stats_{conn_hash}"
-        
+
         # Get cached server stats
         cached_stats_str = self._get_cache_metadata(cache_key)
         if not cached_stats_str:
             return False
-        
+
         try:
             import json
             cached_stats = json.loads(cached_stats_str)
-            
+
             # Compare record counts
             if cached_stats.get('total_records') != server_stats.get('total_records'):
                 return False
-            
+
             # Compare table breakdown
             cached_breakdown = cached_stats.get('table_breakdown', {})
             server_breakdown = server_stats.get('table_breakdown', {})
             if cached_breakdown != server_breakdown:
                 return False
-            
+
             # Compare latest timestamps if available
             cached_timestamps = cached_stats.get('latest_timestamps', {})
             server_timestamps = server_stats.get('latest_timestamps', {})
             if cached_timestamps != server_timestamps:
                 return False
-            
+
             return True
-            
+
         except (json.JSONDecodeError, KeyError):
             return False
 
     def _update_cache(self, database: LiteLLMDatabase, connection_string: str) -> None:
         """Update cache with fresh data from server."""
         self.console.print("[blue]Updating local cache with fresh data...[/blue]")
-        
+
         # Get all data from server
         try:
             data = database.get_usage_data()
@@ -226,16 +226,16 @@ class DataCache:
         except Exception as e:
             self.console.print(f"[red]Error fetching data from server: {e}[/red]")
             return
-        
+
         if data.is_empty():
             self.console.print("[yellow]No data found on server[/yellow]")
             return
-        
+
         # Clear existing cache data
         conn = sqlite3.connect(self.cache_file)
         try:
             conn.execute("DELETE FROM consolidated_spend")
-            
+
             # Insert new data
             records = data.to_dicts()
             for record in records:
@@ -254,42 +254,42 @@ class DataCache:
                     record.get('prompt_tokens', 0), record.get('completion_tokens', 0),
                     record.get('spend', 0.0), record.get('api_requests', 0),
                     record.get('successful_requests', 0), record.get('failed_requests', 0),
-                    record.get('cache_creation_input_tokens', 0), 
+                    record.get('cache_creation_input_tokens', 0),
                     record.get('cache_read_input_tokens', 0),
                     record.get('created_at'), record.get('updated_at')
                 ))
-            
+
             conn.commit()
-            
+
             # Update cache metadata
             server_stats = self._check_server_freshness(database)
             conn_hash = self._get_connection_hash(connection_string)
             cache_key = f"server_stats_{conn_hash}"
-            
+
             import json
             self._set_cache_metadata(cache_key, json.dumps(server_stats))
             self._set_cache_metadata(f"last_update_{conn_hash}", datetime.now().isoformat())
-            
+
             self.console.print(f"[green]Cache updated with {len(records):,} records[/green]")
-            
+
         finally:
             conn.close()
 
-    def get_cached_data(self, database: Optional[LiteLLMDatabase], connection_string: str, 
+    def get_cached_data(self, database: Optional[LiteLLMDatabase], connection_string: str,
                        limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
         """Get data from cache, refreshing if necessary."""
-        
+
         # First check if cache is empty and force refresh if so
         cache_empty = self._is_cache_empty()
         if cache_empty and database is not None:
             self.console.print("[blue]Cache is empty - forcing initial refresh...[/blue]")
             force_refresh = True
-        
+
         # Check if we should use server or cache
         if database is not None:
             server_stats = self._check_server_freshness(database)
             server_available = server_stats.get('server_available', True)
-            
+
             if server_available:
                 if force_refresh or not self._is_cache_fresh(connection_string, server_stats):
                     self._update_cache(database, connection_string)
@@ -299,12 +299,12 @@ class DataCache:
                 self.console.print("[yellow]⚠️  Server unavailable - using cached data (may be out of date)[/yellow]")
         else:
             self.console.print("[yellow]⚠️  No server connection - using cached data (may be out of date)[/yellow]")
-        
+
         # Load data from cache
         query = "SELECT * FROM consolidated_spend ORDER BY date DESC, created_at DESC"
         if limit:
             query += f" LIMIT {limit}"
-        
+
         conn = sqlite3.connect(self.cache_file)
         try:
             # Use polars to read from SQLite
@@ -318,17 +318,17 @@ class DataCache:
     def get_cache_info(self, connection_string: str) -> dict[str, Any]:
         """Get information about cached data."""
         conn_hash = self._get_connection_hash(connection_string)
-        
+
         # Get cache metadata
         last_update = self._get_cache_metadata(f"last_update_{conn_hash}")
         server_stats_str = self._get_cache_metadata(f"server_stats_{conn_hash}")
-        
+
         # Get cache record count
         conn = sqlite3.connect(self.cache_file)
         try:
             cursor = conn.execute("SELECT COUNT(*) FROM consolidated_spend")
             cache_count = cursor.fetchone()[0]
-            
+
             # Get cache breakdown by entity type
             cursor = conn.execute("""
                 SELECT entity_type, COUNT(*) 
@@ -336,24 +336,24 @@ class DataCache:
                 GROUP BY entity_type
             """)
             breakdown = dict(cursor.fetchall())
-            
+
         finally:
             conn.close()
-        
+
         result = {
             'cache_file': str(self.cache_file),
             'record_count': cache_count,
             'breakdown': breakdown,
             'last_update': last_update
         }
-        
+
         if server_stats_str:
             try:
                 import json
                 result['server_stats'] = json.loads(server_stats_str)
             except json.JSONDecodeError:
                 pass
-        
+
         return result
 
     def clear_cache(self, connection_string: Optional[str] = None) -> None:
@@ -361,7 +361,7 @@ class DataCache:
         conn = sqlite3.connect(self.cache_file)
         try:
             conn.execute("DELETE FROM consolidated_spend")
-            
+
             if connection_string:
                 # Clear specific connection metadata
                 conn_hash = self._get_connection_hash(connection_string)
@@ -369,7 +369,7 @@ class DataCache:
             else:
                 # Clear all metadata
                 conn.execute("DELETE FROM cache_metadata")
-            
+
             conn.commit()
             self.console.print("[green]Cache cleared[/green]")
         finally:

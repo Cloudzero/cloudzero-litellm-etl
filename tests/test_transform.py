@@ -62,23 +62,22 @@ class TestCBFTransformer:
         assert len(result) == 1
         record = result.row(0, named=True)
 
-        # Check CBF format fields
-        assert record['service'] == 'litellm'
-        assert record['resource_id'] == 'czrn:litellm:openai:cross-region:user-456:llm-usage:gpt-3.5-turbo'
-        assert record['cost'] == 0.002
-        assert record['usage_amount'] == 150  # prompt + completion tokens
-        assert record['usage_unit'] == 'tokens'
-        assert record['prompt_tokens'] == 100
-        assert record['completion_tokens'] == 50
-        assert record['usage_start'] == '2024-01-01T00:00:00'
-        assert record['line_item_id'] == 'spend_123'
-        assert record['operation'] == 'llm_inference'
+        # Check CBF format fields with namespaced names
+        assert record['resource/service'] == 'litellm'
+        assert record['resource/id'] == 'czrn:litellm:openai:cross-region:user-456:llm-usage:gpt-3.5-turbo'
+        assert record['cost/cost'] == 0.002
+        assert record['usage/amount'] == 150  # prompt + completion tokens
+        assert record['usage/units'] == 'tokens'
+        assert record['resource/tag:prompt_tokens'] == '100'
+        assert record['resource/tag:completion_tokens'] == '50'
+        assert record['time/usage_start'] == '2024-01-01T00:00:00'
+        assert record['lineitem/type'] == 'Usage'
 
-        dimensions = record['dimensions']
-        assert dimensions['model'] == 'gpt-3.5-turbo'
-        assert dimensions['entity_id'] == 'user_456'
-        assert dimensions['entity_type'] == 'user'
-        assert dimensions['provider'] == 'openai'
+        # Check resource tags (dimensions are now stored as resource/tag: fields)
+        assert record['resource/tag:model'] == 'gpt-3.5-turbo'
+        assert record['resource/tag:entity_id'] == 'user_456'
+        assert record['resource/tag:entity_type'] == 'user'
+        assert record['resource/tag:provider'] == 'openai'
 
     def test_team_transformation(self):
         """Test transformation with team entity type."""
@@ -106,16 +105,16 @@ class TestCBFTransformer:
         result = transformer.transform(data)
         record = result.row(0, named=True)
 
-        assert record['resource_id'] == 'czrn:litellm:openai:cross-region:team-engineering:llm-usage:gpt-4'
-        assert record['usage_amount'] == 300  # 200 + 100 tokens
-        assert record['cost'] == 0.05
+        assert record['resource/id'] == 'czrn:litellm:openai:cross-region:team-engineering:llm-usage:gpt-4'
+        assert record['usage/amount'] == 300  # 200 + 100 tokens
+        assert record['cost/cost'] == 0.05
 
-        dimensions = record['dimensions']
-        assert dimensions['entity_type'] == 'team'
-        assert dimensions['entity_id'] == 'team_engineering'
-        assert dimensions['api_requests'] == '5'
-        assert dimensions['successful_requests'] == '4'
-        assert dimensions['failed_requests'] == '1'
+        # Check resource tags (dimensions are now stored as resource/tag: fields)
+        assert record['resource/tag:entity_type'] == 'team'
+        assert record['resource/tag:entity_id'] == 'team_engineering'
+        assert record['resource/tag:api_requests'] == '5'
+        assert record['resource/tag:successful_requests'] == '4'
+        assert record['resource/tag:failed_requests'] == '1'
 
     def test_date_parsing(self):
         """Test date parsing for usage_start field."""
@@ -144,5 +143,5 @@ class TestCBFTransformer:
         record = result.row(0, named=True)
 
         # Should parse to midnight UTC
-        assert record['usage_start'] == '2024-12-25T00:00:00'
+        assert record['time/usage_start'] == '2024-12-25T00:00:00'
 

@@ -22,7 +22,6 @@ from typing import Optional
 import yaml
 from rich.console import Console
 from rich.prompt import Prompt
-from rich.panel import Panel
 
 
 class Config:
@@ -173,11 +172,11 @@ class Config:
 
         # Get current value
         current_value = config.get(key, '')
-        
+
         # Display parameter info
         self.console.print(f"\n[bold cyan]{name}[/bold cyan]")
         self.console.print(f"[dim]{description}[/dim]")
-        
+
         if current_value:
             self.console.print(f"Current: [green]{current_value}[/green]")
         else:
@@ -187,8 +186,8 @@ class Config:
         # Get input from user - all input is visible
         prompt_text = f"New {name.lower()}"
         new_value = Prompt.ask(
-            prompt_text, 
-            default=current_value if current_value else "", 
+            prompt_text,
+            default=current_value if current_value else "",
             show_default=bool(current_value)
         )
 
@@ -202,10 +201,10 @@ class Config:
     def _show_config_summary(self, new_config: dict, old_config: dict) -> None:
         """Show a summary of configuration changes."""
         self.console.print("\n[bold yellow]📋 Configuration Changes Summary[/bold yellow]")
-        
-        from rich.table import Table
+
         from rich.box import SIMPLE
-        
+        from rich.table import Table
+
         changes_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
         changes_table.add_column("Parameter", style="bold blue", no_wrap=False)
         changes_table.add_column("Old Value", style="red", no_wrap=False)
@@ -221,7 +220,7 @@ class Config:
         for key in ['database_url', 'cz_api_key', 'cz_connection_id']:
             old_val = old_config.get(key, '')
             new_val = new_config.get(key, '')
-            
+
             if old_val != new_val:
                 # Show full values for display
                 old_display = old_val if old_val else "[red]Not set[/red]"
@@ -243,16 +242,6 @@ class Config:
 
         self.console.print(changes_table)
 
-    def _mask_sensitive_value(self, value: str) -> str:
-        """Mask sensitive configuration values for display."""
-        if not value:
-            return value
-        if len(value) > 20:
-            return f"{value[:8]}...{value[-4:]}"
-        elif len(value) > 8:
-            return f"{value[:4]}{'*' * (len(value) - 4)}"
-        else:
-            return '*' * len(value)
 
     def _confirm_save_changes(self) -> bool:
         """Confirm if user wants to save the configuration changes."""
@@ -266,10 +255,10 @@ class Config:
         """Save configuration to file."""
         # Ensure config directory exists
         self.config_dir.mkdir(exist_ok=True)
-        
+
         # Save with nice formatting
         with self.config_file.open('w') as f:
             yaml.dump(config_data, f, default_flow_style=False, sort_keys=False, indent=2)
-        
+
         # Update in-memory config
         self.config_data = config_data.copy()

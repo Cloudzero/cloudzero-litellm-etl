@@ -19,7 +19,7 @@
 """Database connection and data extraction for LiteLLM."""
 
 import polars as pl
-import psycopg2
+import psycopg
 
 
 class LiteLLMDatabase:
@@ -28,12 +28,12 @@ class LiteLLMDatabase:
     def __init__(self, connection_string: str):
         """Initialize database connection."""
         self.connection_string = connection_string
-        self._connection: psycopg2.extensions.connection | None = None
+        self._connection: psycopg.Connection | None = None
 
-    def connect(self) -> psycopg2.extensions.connection:
+    def connect(self) -> psycopg.Connection:
         """Establish database connection."""
         if self._connection is None or self._connection.closed:
-            self._connection = psycopg2.connect(self.connection_string)
+            self._connection = psycopg.connect(self.connection_string)
         return self._connection
 
     def get_usage_data(self, limit: int | None = None) -> pl.DataFrame:
@@ -154,7 +154,7 @@ class LiteLLMDatabase:
         finally:
             conn.close()
 
-    def _get_table_row_count(self, conn: psycopg2.extensions.connection, table_name: str) -> int:
+    def _get_table_row_count(self, conn: psycopg.Connection, table_name: str) -> int:
         """Get row count from specified table."""
         with conn.cursor() as cursor:
             cursor.execute(f'SELECT COUNT(*) FROM "{table_name}"')
@@ -174,7 +174,7 @@ class LiteLLMDatabase:
             """
             tables_df = pl.read_database(litellm_tables_query, conn)
             table_names = [row['table_name'] for row in tables_df.to_dicts()]
-            
+
             # Get detailed schema for each table
             tables_info = {}
             for table_name in table_names:
@@ -195,7 +195,7 @@ class LiteLLMDatabase:
                 ORDER BY ordinal_position;
                 """
                 columns_df = pl.read_database(columns_query, conn, execute_options={"parameters": [table_name]})
-                
+
                 # Get primary key information
                 pk_query = """
                 SELECT a.attname
@@ -205,7 +205,7 @@ class LiteLLMDatabase:
                 """
                 pk_df = pl.read_database(pk_query, conn, execute_options={"parameters": [f'"{table_name}"']})
                 primary_keys = [row['attname'] for row in pk_df.to_dicts()] if not pk_df.is_empty() else []
-                
+
                 # Get foreign key information
                 fk_query = """
                 SELECT
@@ -223,7 +223,7 @@ class LiteLLMDatabase:
                 """
                 fk_df = pl.read_database(fk_query, conn, execute_options={"parameters": [table_name]})
                 foreign_keys = fk_df.to_dicts() if not fk_df.is_empty() else []
-                
+
                 # Get indexes
                 indexes_query = """
                 SELECT
@@ -241,13 +241,13 @@ class LiteLLMDatabase:
                 """
                 indexes_df = pl.read_database(indexes_query, conn, execute_options={"parameters": [table_name]})
                 indexes = indexes_df.to_dicts() if not indexes_df.is_empty() else []
-                
+
                 # Get row count
                 try:
                     row_count = self._get_table_row_count(conn, table_name)
                 except Exception:
                     row_count = 0
-                
+
                 tables_info[table_name] = {
                     'columns': columns_df.to_dicts(),
                     'primary_keys': primary_keys,
@@ -255,7 +255,7 @@ class LiteLLMDatabase:
                     'indexes': indexes,
                     'row_count': row_count
                 }
-            
+
             return {
                 'tables': tables_info,
                 'table_count': len(table_names),
