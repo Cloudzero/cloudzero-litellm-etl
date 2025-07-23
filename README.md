@@ -38,10 +38,10 @@ ll2cz supports configuration files to avoid repeating common settings. You can s
 
 ```bash
 # Create an example configuration file
-ll2cz config-example
+ll2cz config example
 
 # Check current configuration status
-ll2cz config-status
+ll2cz config status
 ```
 
 This creates `~/.ll2cz/config.yml` with the following structure:
