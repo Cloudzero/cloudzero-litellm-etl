@@ -12,11 +12,19 @@ Transform LiteLLM database data into CloudZero AnyCost CBF format for cost track
 
 ## Installation
 
+### From PyPI (Recommended)
+
 ```bash
-# Install from PyPI (once published)
+# Install with uv (recommended)
 uv add litellm-cz-etl
 
-# Or install from source
+# Or install with pip
+pip install litellm-cz-etl
+```
+
+### From Source
+
+```bash
 git clone <repository-url>
 cd litellm-cz-etl
 uv sync
