@@ -24,7 +24,7 @@ import litellm
 import polars as pl
 
 
-def normalize_provider(provider: Union[str, litellm.LlmProviders, Any]) -> str:
+def normalize_service(provider: Union[str, litellm.LlmProviders, Any]) -> str:
     """Normalize LiteLLM provider names to standard CZRN format.
 
     Maps various provider representations (enum values, strings, variations)
@@ -37,12 +37,16 @@ def normalize_provider(provider: Union[str, litellm.LlmProviders, Any]) -> str:
         Normalized provider name as lowercase string
 
     Examples:
-        >>> normalize_provider("openai")
+        >>> normalize_service("openai")
         'openai'
-        >>> normalize_provider("azure_openai")
+        >>> normalize_service("azure_openai")
         'azure'
-        >>> normalize_provider("bedrock")
+        >>> normalize_service("azure_ai")
+        'azure'
+        >>> normalize_service("bedrock")
         'aws'
+        >>> normalize_service("custom_provider")
+        'custom'
     """
     # Handle enum types
     if hasattr(provider, 'value'):
@@ -113,8 +117,24 @@ def normalize_provider(provider: Union[str, litellm.LlmProviders, Any]) -> str:
         'local': 'local'
     }
 
-    # Return mapped value or fallback to lowercase string
-    return provider_mapping.get(provider_str, provider_str)
+    # Check if we have an exact mapping first
+    if provider_str in provider_mapping:
+        return provider_mapping[provider_str]
+
+    # For unmapped providers, try dropping text after first "_" or "-"
+    # e.g. "azure_ai" becomes "azure", "custom-llm" becomes "custom"
+    base_provider = provider_str
+    for separator in ['_', '-']:
+        if separator in provider_str:
+            base_provider = provider_str.split(separator)[0]
+            break
+
+    # Check if the base provider has a mapping
+    if base_provider in provider_mapping:
+        return provider_mapping[base_provider]
+
+    # Return the base provider (after dropping suffix) or original if no separator found
+    return base_provider
 
 
 def normalize_component(component: str, allow_uppercase: bool = False) -> str:
@@ -182,6 +202,10 @@ def extract_model_name(model: str) -> str:
     Examples:
         >>> extract_model_name("claude-3-5-haiku-20241022")
         'claude-haiku'
+        >>> extract_model_name("claude-2.1")
+        'claude'
+        >>> extract_model_name("us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+        'claude-sonnet'
         >>> extract_model_name("gpt-4o")
         'gpt'
         >>> extract_model_name("o1-preview")
@@ -198,19 +222,31 @@ def extract_model_name(model: str) -> str:
     if '/' in model:
         model = model.split('/')[-1]
 
-    # Handle AWS Bedrock format (e.g., "us.amazon.nova-lite-v1:0")
-    if ':' in model and '.' in model and 'amazon' in model:
-        # Extract the model part after "amazon."
+    # Handle AWS Bedrock format (e.g., "us.amazon.nova-lite-v1:0", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+    if ':' in model and '.' in model:
+        # Extract the model part before the colon and after the provider
         parts = model.split(':')[0].split('.')
-        if len(parts) >= 3 and parts[1] == 'amazon':
-            model = '.'.join(parts[2:])  # e.g., "nova-lite-v1"
+        if len(parts) >= 3:
+            if parts[1] == 'amazon':
+                model = '.'.join(parts[2:])  # e.g., "nova-lite-v1"
+            elif parts[1] == 'anthropic':
+                model = '.'.join(parts[2:])  # e.g., "claude-3-7-sonnet-20250219-v1"
 
     # Handle provider.model format (e.g., "amazon.titan-text-lite-v1")
+    # Only apply this if the dot appears early in the string (likely a provider prefix)
+    # and not if it's part of a version number (like "claude-2.1")
     if '.' in model and not model.startswith('gpt') and not model.startswith('text-'):
         parts = model.split('.')
         if len(parts) >= 2:
-            # Skip the provider part, keep the model part
-            model = '.'.join(parts[1:])
+            # Only treat as provider.model if the first part looks like a provider
+            # and the dot is not part of a version number at the end
+            first_part = parts[0]
+            # Check if first part is a known provider or looks like one (no hyphens, short)
+            known_providers = {'amazon', 'google', 'microsoft', 'anthropic', 'openai', 'meta', 'cohere'}
+            if (first_part in known_providers or
+                (len(first_part) <= 10 and '-' not in first_part and not first_part.isdigit())):
+                # Skip the provider part, keep the model part
+                model = '.'.join(parts[1:])
 
     # Define version patterns that should be removed
     version_patterns = [
@@ -221,8 +257,9 @@ def extract_model_name(model: str) -> str:
         r'^v[0-9]+$',                   # Version prefix: "v1", "v2"
         r'^v[0-9]+\.[0-9]+$',           # Version semantic: "v1.0", "v2.1"
         r'^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$',  # Date format: "2024.01.15"
-        r'^[0-9]{8}$',                  # Date format: "20240115"
+        r'^[0-9]{8}$',                  # Date format: "20240115", "20250219"
         r'^[0-9]{6}$',                  # Short date: "240115"
+        r'^[0-9]+-[0-9]+-[0-9]+$',      # Hyphenated version: "3-7-sonnet" -> remove "3-7"
     ]
 
     # Version-related words that should be removed
@@ -300,7 +337,7 @@ def extract_model_name(model: str) -> str:
     result = '-'.join(filtered_parts)
 
     # Final cleanup - remove any trailing version-like suffixes
-    result = re.sub(r'-+(latest|stable|preview|final)$', '', result)
+    result = re.sub(r'-+(latest|stable|preview|final|v[0-9]+)$', '', result)
 
     return result if result else original_model.lower()
 
@@ -354,12 +391,19 @@ def parse_date(date_value: Union[str, datetime, None]) -> Optional[datetime]:
 
 # Mapping dictionaries for field analysis and documentation
 CZRN_FIELD_MAPPINGS = {
-    'custom_llm_provider': 'service-type (via normalize_provider)',
+    'custom_llm_provider': 'service-type (via normalize_service)',
     'key_alias': 'owner-account-id (via normalize_component, preferred)',
     'api_key': 'owner-account-id (via normalize_component, fallback)',
     'model': 'resource-type (via extract_model_name)',
     # Note: provider='litellm' (constant), region='cross-region' (constant)
     # cloud-local-id is derived from custom_llm_provider + model
+}
+
+# Additional CZRN components that are constants or derived (for display purposes)
+CZRN_CONSTANT_MAPPINGS = {
+    '__provider__': 'provider (constant: "litellm")',
+    '__region__': 'region (constant: "cross-region")',
+    '__cloud_local_id__': 'cloud-local-id (derived from provider + model)',
 }
 
 CBF_FIELD_MAPPINGS = {
@@ -368,7 +412,7 @@ CBF_FIELD_MAPPINGS = {
     'spend': 'cost/cost',
     'prompt_tokens': 'usage/amount (partial)',
     'completion_tokens': 'usage/amount (partial)',
-    'custom_llm_provider': 'resource/service (via normalize_provider)',
+    'custom_llm_provider': 'resource/service (via normalize_service)',
     'key_alias': 'resource/account (via normalize_component, preferred)',
     'api_key': 'resource/account (via normalize_component, fallback)',
     'model': 'resource/usage_family (via extract_model_name)',
@@ -392,5 +436,12 @@ CBF_FIELD_MAPPINGS = {
     # Resource tags - enriched organization information
     'organization_alias': 'resource/tag:organization_alias',
     'organization_id': 'resource/tag:organization_id',
-    # Note: resource/id comes from full CZRN, usage/units='tokens' (constant), lineitem/type='Usage' (constant)
+    # Note: resource/id comes from cloud-local-id, usage/units='tokens' (constant), lineitem/type='Usage' (constant), resource/tag:czrn contains full CZRN
+}
+
+# Additional CBF fields that are constants or derived (for display purposes)
+CBF_CONSTANT_MAPPINGS = {
+    '__resource_id__': 'resource/id (cloud-local-id)',
+    '__usage_units__': 'usage/units (constant: "tokens")',
+    '__lineitem_type__': 'lineitem/type (constant: "Usage")',
 }

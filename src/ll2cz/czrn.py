@@ -19,7 +19,7 @@
 import re
 from typing import Any
 
-from .transformations import extract_model_name, normalize_component, normalize_provider
+from .transformations import extract_model_name, normalize_component, normalize_service
 
 
 class CZRNGenerator:
@@ -66,7 +66,7 @@ class CZRNGenerator:
         try:
             provider = 'litellm'
             custom_llm_provider = row.get('custom_llm_provider', 'unknown')
-            service_type = self._normalize_provider(custom_llm_provider)
+            service_type = self._normalize_service(custom_llm_provider)
             region = 'cross-region'
 
             # Use key_alias if available and not null, otherwise fallback to api_key for owner account
@@ -185,10 +185,10 @@ class CZRNGenerator:
 
         return match.groups()
 
-    def _normalize_provider(self, provider: str) -> str:
+    def _normalize_service(self, provider: str) -> str:
         """Normalize provider names to standard CZRN format.
 
-        Delegates to the transformations.normalize_provider function for maximum
+        Delegates to the transformations.normalize_service function for maximum
         reusability across the codebase.
 
         Args:
@@ -197,7 +197,7 @@ class CZRNGenerator:
         Returns:
             Normalized provider name as lowercase string
         """
-        return normalize_provider(provider)
+        return normalize_service(provider)
 
     def _normalize_component(self, component: str, allow_uppercase: bool = False) -> str:
         """Normalize a CZRN component to meet format requirements.

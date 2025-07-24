@@ -70,11 +70,14 @@ class TestCZRNGenerator:
             ('aws_bedrock', 'aws'),
             ('aws', 'aws'),
             ('together_ai', 'together'),
-            ('unknown_provider', 'unknown_provider'),
+            ('unknown_provider', 'unknown'),
+            ('azure_ai', 'azure'),
+            ('custom-llm', 'custom'),
+            ('nova_provider', 'nova'),
         ]
 
         for input_provider, expected in test_cases:
-            normalized = generator._normalize_provider(input_provider)
+            normalized = generator._normalize_service(input_provider)
             assert normalized == expected
 
     def test_component_normalization(self):

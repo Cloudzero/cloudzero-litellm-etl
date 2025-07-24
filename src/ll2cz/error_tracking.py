@@ -26,11 +26,13 @@ from rich.console import Console
 from rich.table import Table
 
 from .transformations import (
+    CBF_CONSTANT_MAPPINGS,
     CBF_FIELD_MAPPINGS,
+    CZRN_CONSTANT_MAPPINGS,
     CZRN_FIELD_MAPPINGS,
     extract_model_name,
     normalize_component,
-    normalize_provider,
+    normalize_service,
     parse_date,
 )
 
@@ -126,6 +128,95 @@ class ConsolidatedErrorTracker:
                 cbf_mapping=cbf_mappings.get(column)
             )
 
+        # Add constant/derived CZRN components for complete schema visibility
+        for constant_field, czrn_mapping in CZRN_CONSTANT_MAPPINGS.items():
+            # Generate sample values for constants
+            if constant_field == '__provider__':
+                sample_values = ['litellm']
+            elif constant_field == '__region__':
+                sample_values = ['cross-region']
+            elif constant_field == '__cloud_local_id__':
+                # Show example based on actual data if available
+                if 'custom_llm_provider' in data.columns and 'model' in data.columns:
+                    provider_sample = data['custom_llm_provider'].limit(1).to_list()
+                    model_sample = data['model'].limit(1).to_list()
+                    if provider_sample and model_sample:
+                        provider = str(provider_sample[0])
+                        model = str(model_sample[0])
+                        if provider not in model:
+                            sample_values = [f'{provider}/{model}']
+                        else:
+                            sample_values = [model]
+                    else:
+                        sample_values = ['provider/model-name']
+                else:
+                    sample_values = ['provider/model-name']
+            else:
+                sample_values = []
+
+            field_analysis[constant_field] = SourceFieldAnalysis(
+                field_name=constant_field,
+                unique_count=1,  # Constants have unique count of 1
+                null_count=0,    # Constants are never null
+                empty_count=0,   # Constants are never empty
+                total_count=len(data) if not data.is_empty() else 0,
+                sample_values=sample_values,
+                czrn_mapping=czrn_mapping,
+                cbf_mapping=None
+            )
+
+        # Add the generated CZRN field to show it's part of CBF output
+        field_analysis['__generated_czrn__'] = SourceFieldAnalysis(
+            field_name='__generated_czrn__',
+            unique_count=len(data) if not data.is_empty() else 0,  # Each record could have unique CZRN
+            null_count=0,    # Generated fields are never null
+            empty_count=0,   # Generated fields are never empty
+            total_count=len(data) if not data.is_empty() else 0,
+            sample_values=['czrn:litellm:openai:cross-region:api-key:gpt:openai/gpt-4'],
+            czrn_mapping=None,
+            cbf_mapping='resource/tag:czrn (derived from source data)'
+        )
+
+        # Add constant/derived CBF fields for complete schema visibility
+        for constant_field, cbf_mapping in CBF_CONSTANT_MAPPINGS.items():
+            # Generate sample values for constants
+            if constant_field == '__resource_id__':
+                # Show example cloud-local-id based on actual data if available
+                if 'custom_llm_provider' in data.columns and 'model' in data.columns:
+                    provider_sample = data['custom_llm_provider'].limit(1).to_list()
+                    model_sample = data['model'].limit(1).to_list()
+                    if provider_sample and model_sample:
+                        provider = str(provider_sample[0])
+                        model = str(model_sample[0])
+                        if provider not in model:
+                            sample_values = [f'{provider}/{model}']
+                        else:
+                            sample_values = [model]
+                    else:
+                        sample_values = ['openai/gpt-4']
+                else:
+                    sample_values = ['openai/gpt-4']
+            elif constant_field == '__usage_units__':
+                sample_values = ['tokens']
+            elif constant_field == '__lineitem_type__':
+                sample_values = ['Usage']
+            elif constant_field == '__resource_tag_czrn__':
+                # Show example full CZRN
+                sample_values = ['czrn:litellm:openai:cross-region:api-key:gpt:openai/gpt-4']
+            else:
+                sample_values = []
+
+            field_analysis[constant_field] = SourceFieldAnalysis(
+                field_name=constant_field,
+                unique_count=1,  # Constants have unique count of 1
+                null_count=0,    # Constants are never null
+                empty_count=0,   # Constants are never empty
+                total_count=len(data) if not data.is_empty() else 0,
+                sample_values=sample_values,
+                czrn_mapping=None,
+                cbf_mapping=cbf_mapping
+            )
+
         return field_analysis
 
     def get_error_summary(self) -> Dict[str, Any]:
@@ -175,12 +266,23 @@ class ConsolidatedErrorTracker:
         field_table.add_column("Sample Source Values", style="dim", no_wrap=False)
         field_table.add_column("Sample Mapped Values", style="bold white", no_wrap=False)
 
-        # Sort fields: mapped fields first (both CZRN+CBF, then CZRN only, then CBF only), then unmapped
+        # Sort fields: source fields first (by mapping priority), then constant fields
         def sort_key(item):
             field_name, analysis = item
             has_czrn = analysis.czrn_mapping is not None
             has_cbf = analysis.cbf_mapping is not None
+            is_constant_field = field_name.startswith('__') and field_name.endswith('__')
 
+            # Constant fields go at the end, sorted by type (CZRN constants, then CBF constants)
+            if is_constant_field:
+                if has_czrn:
+                    return (10, field_name)  # CZRN constants
+                elif has_cbf:
+                    return (11, field_name)  # CBF constants
+                else:
+                    return (12, field_name)  # Other constants
+
+            # Source fields come first, sorted by mapping priority
             if has_czrn and has_cbf:
                 return (0, field_name)  # Both mappings - highest priority
             elif has_czrn:
@@ -193,18 +295,30 @@ class ConsolidatedErrorTracker:
         sorted_fields = sorted(field_analysis.items(), key=sort_key)
 
         for field_name, analysis in sorted_fields:
+            is_constant_field = field_name.startswith('__') and field_name.endswith('__')
+
             # Format sample source values
-            sample_source_str = ""
-            if analysis.sample_values:
-                # Show up to 3 sample values
-                samples = analysis.sample_values[:3]
-                sample_source_str = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in samples])
-                if len(analysis.sample_values) > 3:
-                    sample_source_str += f" (+{len(analysis.sample_values) - 3} more)"
+            if is_constant_field:
+                # For constant fields, indicate they are not source fields
+                sample_source_str = "[dim italic]N/A (constant)[/dim italic]"
+            else:
+                sample_source_str = ""
+                if analysis.sample_values:
+                    # Show up to 3 sample values
+                    samples = analysis.sample_values[:3]
+                    sample_source_str = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in samples])
+                    if len(analysis.sample_values) > 3:
+                        sample_source_str += f" (+{len(analysis.sample_values) - 3} more)"
 
             # Generate sample mapped values by applying transformations
             sample_mapped_str = "[dim]no mapping[/dim]"
-            if analysis.sample_values:
+
+            # Handle constant fields differently
+            if is_constant_field:
+                # For constant fields, show the values directly as they are already the mapped values
+                if analysis.sample_values:
+                    sample_mapped_str = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in analysis.sample_values[:3]])
+            elif analysis.sample_values:
                 mapped_samples = []
                 samples_to_transform = analysis.sample_values[:3]
 
@@ -215,7 +329,7 @@ class ConsolidatedErrorTracker:
                             transformed = extract_model_name(str(sample_value))
                             mapped_samples.append(f"'{transformed}'")
                         elif field_name == 'custom_llm_provider':
-                            transformed = normalize_provider(str(sample_value))
+                            transformed = normalize_service(str(sample_value))
                             mapped_samples.append(f"'{transformed}'")
                         elif field_name == 'entity_id':
                             transformed = normalize_component(str(sample_value))
@@ -247,24 +361,37 @@ class ConsolidatedErrorTracker:
             # Color-code field names based on mapping relationships
             has_czrn = analysis.czrn_mapping is not None
             has_cbf = analysis.cbf_mapping is not None
+            is_constant_field = field_name.startswith('__') and field_name.endswith('__')
 
-            if has_czrn and has_cbf:
-                # Both CZRN and CBF mapping - green
-                field_display = f"[bold green]{field_name}[/bold green]"
-            elif has_czrn:
-                # CZRN mapping only - magenta (matches CZRN column color)
-                field_display = f"[bold magenta]{field_name}[/bold magenta]"
-            elif has_cbf:
-                # CBF mapping only - bright blue (matches CBF column color)
-                field_display = f"[bold bright_blue]{field_name}[/bold bright_blue]"
+            # Handle constant/derived fields differently
+            if is_constant_field:
+                # Remove the __ prefixes for display
+                display_name = field_name.replace('__', '').replace('_', ' ').title()
+                if has_czrn:
+                    field_display = f"[italic magenta]{display_name} (constant)[/italic magenta]"
+                elif has_cbf:
+                    field_display = f"[italic bright_blue]{display_name} (constant)[/italic bright_blue]"
+                else:
+                    field_display = f"[italic dim]{display_name} (constant)[/italic dim]"
             else:
-                # No mapping - dim white for better distinction
-                field_display = f"[dim white]{field_name}[/dim white]"
+                # Regular source fields
+                if has_czrn and has_cbf:
+                    # Both CZRN and CBF mapping - green
+                    field_display = f"[bold green]{field_name}[/bold green]"
+                elif has_czrn:
+                    # CZRN mapping only - magenta (matches CZRN column color)
+                    field_display = f"[bold magenta]{field_name}[/bold magenta]"
+                elif has_cbf:
+                    # CBF mapping only - bright blue (matches CBF column color)
+                    field_display = f"[bold bright_blue]{field_name}[/bold bright_blue]"
+                else:
+                    # No mapping - dim white for better distinction
+                    field_display = f"[dim white]{field_name}[/dim white]"
 
-            # Override with red for problematic critical fields
-            if analysis.null_count > 0 or analysis.empty_count > 0:
-                if field_name in ['model', 'entity_id', 'custom_llm_provider']:
-                    field_display = f"[bold red]{field_name}[/bold red]"
+                # Override with red for problematic critical fields
+                if analysis.null_count > 0 or analysis.empty_count > 0:
+                    if field_name in ['model', 'entity_id', 'custom_llm_provider']:
+                        field_display = f"[bold red]{field_name}[/bold red]"
 
             field_table.add_row(
                 field_display,
@@ -281,25 +408,39 @@ class ConsolidatedErrorTracker:
 
         # Color legend
         self.console.print("\n[bold cyan]🎨 Field Color Legend:[/bold cyan]")
-        self.console.print("  [bold green]Green[/bold green] = Mapped to both CZRN and CBF")
-        self.console.print("  [bold magenta]Magenta[/bold magenta] = Mapped to CZRN only")
-        self.console.print("  [bold bright_blue]Bright Blue[/bold bright_blue] = Mapped to CBF only")
-        self.console.print("  [dim white]Dim White[/dim white] = Not mapped to CZRN or CBF")
+        self.console.print("  [bold green]Green[/bold green] = Source field mapped to both CZRN and CBF")
+        self.console.print("  [bold magenta]Magenta[/bold magenta] = Source field mapped to CZRN only")
+        self.console.print("  [bold bright_blue]Bright Blue[/bold bright_blue] = Source field mapped to CBF only")
+        self.console.print("  [dim white]Dim White[/dim white] = Source field not mapped to CZRN or CBF")
+        self.console.print("  [italic magenta]Italic Magenta[/italic magenta] = CZRN constant/derived field")
+        self.console.print("  [italic bright_blue]Italic Bright Blue[/italic bright_blue] = CBF constant/derived field")
         self.console.print("  [bold red]Red[/bold red] = Critical field with data quality issues")
 
-        # Enhanced summary of mapping coverage
-        both_mapped = sum(1 for a in field_analysis.values() if a.czrn_mapping and a.cbf_mapping)
-        czrn_only = sum(1 for a in field_analysis.values() if a.czrn_mapping and not a.cbf_mapping)
-        cbf_only = sum(1 for a in field_analysis.values() if not a.czrn_mapping and a.cbf_mapping)
-        unmapped = sum(1 for a in field_analysis.values() if not a.czrn_mapping and not a.cbf_mapping)
-        total_fields = len(field_analysis)
+        # Enhanced summary of mapping coverage (separate source fields from constants)
+        source_fields = {k: v for k, v in field_analysis.items() if not (k.startswith('__') and k.endswith('__'))}
+        constant_fields = {k: v for k, v in field_analysis.items() if k.startswith('__') and k.endswith('__')}
 
-        self.console.print("\n[dim]📈 Mapping Coverage Summary:[/dim]")
+        both_mapped = sum(1 for a in source_fields.values() if a.czrn_mapping and a.cbf_mapping)
+        czrn_only = sum(1 for a in source_fields.values() if a.czrn_mapping and not a.cbf_mapping)
+        cbf_only = sum(1 for a in source_fields.values() if not a.czrn_mapping and a.cbf_mapping)
+        unmapped = sum(1 for a in source_fields.values() if not a.czrn_mapping and not a.cbf_mapping)
+        total_source_fields = len(source_fields)
+
+        czrn_constants = sum(1 for a in constant_fields.values() if a.czrn_mapping and not a.cbf_mapping)
+        cbf_constants = sum(1 for a in constant_fields.values() if not a.czrn_mapping and a.cbf_mapping)
+        total_constant_fields = len(constant_fields)
+
+        self.console.print("\n[dim]📈 Source Field Mapping Coverage:[/dim]")
         self.console.print(f"  [bold green]Both CZRN & CBF:[/bold green] {both_mapped} fields")
         self.console.print(f"  [bold magenta]CZRN only:[/bold magenta] {czrn_only} fields")
         self.console.print(f"  [bold bright_blue]CBF only:[/bold bright_blue] {cbf_only} fields")
         self.console.print(f"  [dim white]Unmapped:[/dim white] {unmapped} fields")
-        self.console.print(f"  [cyan]Total fields:[/cyan] {total_fields}")
+        self.console.print(f"  [cyan]Total source fields:[/cyan] {total_source_fields}")
+
+        self.console.print("\n[dim]📋 Constant/Derived Fields:[/dim]")
+        self.console.print(f"  [italic magenta]CZRN constants:[/italic magenta] {czrn_constants} fields")
+        self.console.print(f"  [italic bright_blue]CBF constants:[/italic bright_blue] {cbf_constants} fields")
+        self.console.print(f"  [dim]Total constant fields:[/dim] {total_constant_fields}")
 
         # Ensure all CZRN and CBF fields are accounted for
         missing_czrn = {'provider', 'service-type', 'region', 'owner-account-id', 'resource-type', 'cloud-local-id'}

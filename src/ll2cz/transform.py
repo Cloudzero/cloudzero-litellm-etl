@@ -106,7 +106,8 @@ class CBFTransformer:
         - CZRN region → resource/region (standard CBF field) ["cross-region"]
         - CZRN owner-account-id → resource/account (standard CBF field) [key_alias or api_key]
         - CZRN resource-type → resource/usage_family (standard CBF field) [extracted model name]
-        - CZRN cloud-local-id → resource/tag:model (resource tag) [model identifier]
+        - CZRN cloud-local-id → resource/id (standard CBF field) + resource/tag:model (resource tag) [model identifier]
+        - Full CZRN → resource/tag:czrn (resource tag) [complete CZRN string]
         """
 
         # Parse date (daily spend tables use date strings like '2025-04-19')
@@ -117,9 +118,9 @@ class CBFTransformer:
         completion_tokens = int(row.get('completion_tokens', 0))
         total_tokens = prompt_tokens + completion_tokens
 
-        # Create CloudZero Resource Name (CZRN) as resource_id
+        # Create CloudZero Resource Name (CZRN)
         error_tracker = self.error_tracker if use_error_tracking else None
-        resource_id = self.czrn_generator.create_from_litellm_data(row, error_tracker)
+        full_czrn = self.czrn_generator.create_from_litellm_data(row, error_tracker)
 
         # Build dimensions for CloudZero
         entity_id = str(row.get('entity_id', ''))
@@ -155,7 +156,7 @@ class CBFTransformer:
 
         # Extract CZRN components to populate corresponding CBF columns
         try:
-            czrn_components = self.czrn_generator.extract_components(resource_id)
+            czrn_components = self.czrn_generator.extract_components(full_czrn)
             provider, service_type, region, owner_account_id, resource_type, cloud_local_id = czrn_components
         except Exception as e:
             if use_error_tracking:
@@ -167,7 +168,7 @@ class CBFTransformer:
             # Required CBF fields
             'time/usage_start': usage_date.isoformat() if usage_date else None,  # Required: ISO-formatted UTC datetime
             'cost/cost': float(row.get('spend', 0.0)),  # Required: billed cost
-            'resource/id': resource_id,  # Required when resource tags are present
+            'resource/id': cloud_local_id,  # Required when resource tags are present
 
             # Usage metrics for token consumption
             'usage/amount': total_tokens,  # Numeric value of tokens consumed
@@ -186,6 +187,7 @@ class CBFTransformer:
         # Add CZRN components that don't have standard CBF field mappings as resource tags
         cbf_record['resource/tag:czrn_provider'] = provider  # CZRN provider component ("litellm")
         cbf_record['resource/tag:model'] = cloud_local_id  # CZRN cloud-local-id component
+        cbf_record['resource/tag:czrn'] = full_czrn  # Full CZRN for reference
 
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():

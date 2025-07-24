@@ -65,7 +65,8 @@ class TestCBFTransformer:
         # Check CBF format fields with namespaced names
         assert record['resource/service'] == 'openai'  # service-type from custom_llm_provider
         assert record['resource/account'] == 'sk-test123'  # owner-account-id from api_key
-        assert record['resource/id'] == 'czrn:litellm:openai:cross-region:sk-test123:gpt-turbo:openai/gpt-3.5-turbo'
+        assert record['resource/id'] == 'openai/gpt-3.5-turbo'  # Now contains cloud-local-id
+        assert record['resource/tag:czrn'] == 'czrn:litellm:openai:cross-region:sk-test123:gpt-turbo:openai/gpt-3.5-turbo'  # Full CZRN in tag
         assert record['cost/cost'] == 0.002
         assert record['usage/amount'] == 150  # prompt + completion tokens
         assert record['usage/units'] == 'tokens'
@@ -106,7 +107,8 @@ class TestCBFTransformer:
         result = transformer.transform(data)
         record = result.row(0, named=True)
 
-        assert record['resource/id'] == 'czrn:litellm:openai:cross-region:sk-team789:gpt:openai/gpt-4'
+        assert record['resource/id'] == 'openai/gpt-4'  # Now contains cloud-local-id
+        assert record['resource/tag:czrn'] == 'czrn:litellm:openai:cross-region:sk-team789:gpt:openai/gpt-4'  # Full CZRN in tag
         assert record['usage/amount'] == 300  # 200 + 100 tokens
         assert record['cost/cost'] == 0.05
 
