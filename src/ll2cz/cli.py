@@ -147,12 +147,12 @@ def transmit(
     disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
 ) -> None:
     """Transform LiteLLM data and transmit to CloudZero AnyCost API.
-    
+
     MODES:
       day    - Send data for a specific day (default: today, or specify DD-MM-YYYY)
-      month  - Send data for a specific month (default: current month, or specify MM-YYYY) 
+      month  - Send data for a specific month (default: current month, or specify MM-YYYY)
       all    - Send all available data (batched by day)
-      
+
     EXAMPLES:
       ll2cz transmit day                    # Send today's data
       ll2cz transmit day 15-01-2024         # Send data for January 15, 2024
@@ -486,7 +486,7 @@ def cache_status(
                                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                                 formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
                                 console.print(f"    {table_type.title()}: {formatted_time}")
-                            except:
+                            except Exception:
                                 console.print(f"    {table_type.title()}: {timestamp}")
                         else:
                             console.print(f"    {table_type.title()}: No data")
@@ -755,8 +755,8 @@ def _display_cbf_data_on_screen(cbf_data: pl.DataFrame) -> None:
 
     # Show summary statistics
     total_cost = sum(record.get('cost/cost', 0) for record in records)
-    unique_accounts = len(set(record.get('resource/account', '') for record in records if record.get('resource/account')))
-    unique_services = len(set(record.get('resource/service', '') for record in records if record.get('resource/service')))
+    unique_accounts = len({record.get('resource/account', '') for record in records if record.get('resource/account')})
+    unique_services = len({record.get('resource/service', '') for record in records if record.get('resource/service')})
 
     # Count total tokens from usage metrics
     total_tokens = sum(record.get('usage/amount', 0) for record in records)
@@ -1009,7 +1009,7 @@ def _display_enhanced_test_payloads(cbf_data: pl.DataFrame, operation: str, mode
             try:
                 date_part = timestamp.split('T')[0] if 'T' in timestamp else timestamp[:10]
                 daily_groups[date_part].append(record)
-            except:
+            except Exception:
                 daily_groups['unknown'].append(record)
 
     shown_batches = 0

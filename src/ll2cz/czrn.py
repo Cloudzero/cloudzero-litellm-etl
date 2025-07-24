@@ -34,13 +34,13 @@ class CZRNGenerator:
     @staticmethod
     def extract_model_name(model: str) -> str:
         """Extract the core model name by removing version-related information.
-        
+
         Delegates to the transformations.extract_model_name function for maximum
         reusability across the codebase.
-        
+
         Args:
             model: Full model identifier string
-            
+
         Returns:
             Extracted core model name
         """
@@ -48,9 +48,9 @@ class CZRNGenerator:
 
     def create_from_litellm_data(self, row: dict[str, Any], error_tracker=None) -> str:
         """Create a CZRN from LiteLLM daily spend data.
-        
+
         CZRN format: czrn:<provider>:<service-type>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
-        
+
         For LiteLLM resources, we map:
         - provider: 'litellm' (the service managing the LLM calls)
         - service-type: The custom_llm_provider (e.g., 'openai', 'anthropic', 'azure')
@@ -58,7 +58,7 @@ class CZRNGenerator:
         - owner-account-id: The key_alias (if available) or api_key as fallback
         - resource-type: Extracted model name (e.g., 'claude-haiku', 'gpt', 'gemini')
         - cloud-local-id: Full model identifier with optional provider prefix
-        
+
         Args:
             row: LiteLLM data row
             error_tracker: Optional error tracker for consolidated error reporting
@@ -72,7 +72,7 @@ class CZRNGenerator:
             # Use key_alias if available and not null, otherwise fallback to api_key for owner account
             key_alias = row.get('key_alias')
             api_key = row.get('api_key', 'unknown')
-            
+
             if key_alias and key_alias.strip():
                 owner_account_id = self._normalize_component(key_alias)
             else:
@@ -135,7 +135,7 @@ class CZRNGenerator:
         source_data: dict = None
     ) -> str:
         """Create a CZRN from individual components.
-        
+
         Args:
             provider: CZRN provider component
             service_type: CZRN service-type component
@@ -176,7 +176,7 @@ class CZRNGenerator:
 
     def extract_components(self, czrn: str) -> tuple[str, str, str, str, str, str]:
         """Extract all components from a CZRN.
-        
+
         Returns: (provider, service_type, region, owner_account_id, resource_type, cloud_local_id)
         """
         match = self.CZRN_REGEX.match(czrn)
@@ -187,13 +187,13 @@ class CZRNGenerator:
 
     def _normalize_provider(self, provider: str) -> str:
         """Normalize provider names to standard CZRN format.
-        
+
         Delegates to the transformations.normalize_provider function for maximum
         reusability across the codebase.
-        
+
         Args:
             provider: Provider identifier (LiteLLM enum, string, or other type)
-            
+
         Returns:
             Normalized provider name as lowercase string
         """
@@ -201,14 +201,14 @@ class CZRNGenerator:
 
     def _normalize_component(self, component: str, allow_uppercase: bool = False) -> str:
         """Normalize a CZRN component to meet format requirements.
-        
+
         Delegates to the transformations.normalize_component function for maximum
         reusability across the codebase.
-        
+
         Args:
             component: Raw component string to normalize
             allow_uppercase: Whether to preserve uppercase characters
-            
+
         Returns:
             Normalized component string safe for CZRN usage
         """

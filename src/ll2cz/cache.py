@@ -243,9 +243,9 @@ class DataCache:
                 columns = list(records[0].keys())
                 placeholders = ', '.join(['?' for _ in columns])
                 column_names = ', '.join(columns)
-                
+
                 insert_sql = f"INSERT INTO consolidated_spend ({column_names}) VALUES ({placeholders})"
-                
+
                 for record in records:
                     values = [record.get(col) for col in columns]
                     conn.execute(insert_sql, values)
@@ -273,9 +273,9 @@ class DataCache:
             fresh_data = database.get_usage_data()
             if fresh_data.is_empty():
                 return False
-            
+
             database_columns = set(fresh_data.columns)
-            
+
             # Get cached table columns
             conn = sqlite3.connect(self.cache_file)
             try:
@@ -283,15 +283,15 @@ class DataCache:
                 cache_columns = {row[1] for row in cursor.fetchall()}
             finally:
                 conn.close()
-            
+
             # Check if database has columns that cache doesn't have
             missing_columns = database_columns - cache_columns
             if missing_columns:
                 self.console.print(f"[dim]Cache missing columns: {', '.join(sorted(missing_columns))}[/dim]")
                 return True
-                
+
             return False
-            
+
         except Exception:
             # If we can't check schema, assume no mismatch
             return False
@@ -303,16 +303,16 @@ class DataCache:
             fresh_data = database.get_usage_data()
             if fresh_data.is_empty():
                 return
-            
+
             conn = sqlite3.connect(self.cache_file)
             try:
                 # Drop existing table
                 conn.execute("DROP TABLE IF EXISTS consolidated_spend")
-                
+
                 # Create new table with dynamic schema based on actual data
                 # Use polars schema info to determine SQLite column types
                 column_definitions = []
-                
+
                 for col_name, polars_dtype in fresh_data.schema.items():
                     # Map polars types to SQLite types
                     if polars_dtype in [pl.Int32, pl.Int64]:
@@ -323,13 +323,13 @@ class DataCache:
                         sql_type = "INTEGER"  # SQLite stores booleans as integers
                     else:
                         sql_type = "TEXT"
-                    
+
                     # Handle special columns
                     if col_name in ['id', 'entity_type']:
                         column_definitions.append(f"{col_name} {sql_type} NOT NULL")
                     else:
                         column_definitions.append(f"{col_name} {sql_type}")
-                
+
                 # Create table with dynamic schema
                 create_sql = f"""
                     CREATE TABLE consolidated_spend (
@@ -338,7 +338,7 @@ class DataCache:
                     )
                 """
                 conn.execute(create_sql)
-                
+
                 # Recreate indexes for performance
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_type ON consolidated_spend(entity_type)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON consolidated_spend(date)")
@@ -346,13 +346,13 @@ class DataCache:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_model ON consolidated_spend(model)")
                 if 'custom_llm_provider' in fresh_data.columns:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON consolidated_spend(custom_llm_provider)")
-                
+
                 conn.commit()
                 self.console.print("[blue]Cache schema updated to match database[/blue]")
-                
+
             finally:
                 conn.close()
-                
+
         except Exception as e:
             self.console.print(f"[red]Failed to recreate cache schema: {e}[/red]")
 
@@ -420,8 +420,8 @@ class DataCache:
 
             # Get cache breakdown by entity type
             cursor = conn.execute("""
-                SELECT entity_type, COUNT(*) 
-                FROM consolidated_spend 
+                SELECT entity_type, COUNT(*)
+                FROM consolidated_spend
                 GROUP BY entity_type
             """)
             breakdown = dict(cursor.fetchall())

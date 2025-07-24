@@ -43,7 +43,7 @@ class DataAnalyzer:
 
     def analyze(self, limit: int = 10000, force_refresh: bool = False, show_czrn_analysis: bool = True) -> dict[str, Any]:
         """Perform comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation.
-        
+
         Args:
             limit: Number of records to analyze
             force_refresh: Force refresh cache from server

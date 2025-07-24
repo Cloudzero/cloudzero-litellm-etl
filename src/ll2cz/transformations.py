@@ -339,13 +339,14 @@ def parse_date(date_value: Union[str, datetime, None]) -> Optional[datetime]:
         # Use Polars for consistent date parsing to midnight UTC
         date_series = pl.Series([date_value])
         parsed_series = date_series.str.to_datetime(format='%Y-%m-%d', time_zone='UTC')
-        return parsed_series[0].to_py()
+        # Convert polars datetime to python datetime
+        return parsed_series.to_list()[0]
     except Exception:
         try:
             # Fallback: try ISO format parsing
             date_series = pl.Series([date_value])
             parsed_series = date_series.str.to_datetime(time_zone='UTC')
-            return parsed_series[0].to_py()
+            return parsed_series.to_list()[0]
         except Exception:
             # All parsing attempts failed
             return None
@@ -382,7 +383,6 @@ CBF_FIELD_MAPPINGS = {
     'cache_read_input_tokens': 'resource/tag:cache_read_tokens',
     # Resource tags - enriched API key information
     'key_name': 'resource/tag:key_name',
-    'key_alias': 'resource/tag:key_alias',
     # Resource tags - enriched user information
     'user_alias': 'resource/tag:user_alias',
     'user_email': 'resource/tag:user_email',
