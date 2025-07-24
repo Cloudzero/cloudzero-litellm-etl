@@ -19,6 +19,8 @@
 import re
 from typing import Any
 
+from .transformations import extract_model_name, normalize_component, normalize_provider
+
 
 class CZRNGenerator:
     """Generate CloudZero Resource Names (CZRNs) for LiteLLM resources."""
@@ -29,67 +31,144 @@ class CZRNGenerator:
         """Initialize CZRN generator."""
         pass
 
-    def create_from_litellm_data(self, row: dict[str, Any]) -> str:
+    @staticmethod
+    def extract_model_name(model: str) -> str:
+        """Extract the core model name by removing version-related information.
+        
+        Delegates to the transformations.extract_model_name function for maximum
+        reusability across the codebase.
+        
+        Args:
+            model: Full model identifier string
+            
+        Returns:
+            Extracted core model name
+        """
+        return extract_model_name(model)
+
+    def create_from_litellm_data(self, row: dict[str, Any], error_tracker=None) -> str:
         """Create a CZRN from LiteLLM daily spend data.
         
-        CZRN format: czrn:<service-type>:<provider>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
+        CZRN format: czrn:<provider>:<service-type>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
         
         For LiteLLM resources, we map:
-        - service-type: 'litellm' (the service managing the LLM calls)
-        - provider: The custom_llm_provider (e.g., 'openai', 'anthropic', 'azure')
+        - provider: 'litellm' (the service managing the LLM calls)
+        - service-type: The custom_llm_provider (e.g., 'openai', 'anthropic', 'azure')
         - region: 'cross-region' (LiteLLM operates across regions)
-        - owner-account-id: The team_id or user_id (entity_id)
-        - resource-type: 'llm-usage' (represents LLM usage/inference)
-        - cloud-local-id: model
+        - owner-account-id: The key_alias (if available) or api_key as fallback
+        - resource-type: Extracted model name (e.g., 'claude-haiku', 'gpt', 'gemini')
+        - cloud-local-id: Full model identifier with optional provider prefix
+        
+        Args:
+            row: LiteLLM data row
+            error_tracker: Optional error tracker for consolidated error reporting
         """
-        service_type = 'litellm'
-        provider = self._normalize_provider(row.get('custom_llm_provider', 'unknown'))
-        region = 'cross-region'
+        try:
+            provider = 'litellm'
+            custom_llm_provider = row.get('custom_llm_provider', 'unknown')
+            service_type = self._normalize_provider(custom_llm_provider)
+            region = 'cross-region'
 
-        # Use the actual entity_id (team_id or user_id) as the owner account
-        entity_id = row.get('entity_id', 'unknown')
-        owner_account_id = self._normalize_component(entity_id)
+            # Use key_alias if available and not null, otherwise fallback to api_key for owner account
+            key_alias = row.get('key_alias')
+            api_key = row.get('api_key', 'unknown')
+            
+            if key_alias and key_alias.strip():
+                owner_account_id = self._normalize_component(key_alias)
+            else:
+                owner_account_id = self._normalize_component(api_key)
 
-        resource_type = 'llm-usage'
+            # Get the model for processing
+            model = row.get('model', '').strip() if row.get('model') else ''
 
-        # Create a unique identifier with just the model (entity info already in owner_account_id)
-        model = row.get('model', 'unknown')
+            # Validate model field is not empty, null, or asterisk
+            if not model or model == '*':
+                error_msg = "Cannot generate CZRN: model field is empty, null, or '*'"
+                if error_tracker:
+                    error_tracker.add_error('MISSING_MODEL', error_msg, row, 'CZRN', 'model')
+                raise ValueError(error_msg)
 
-        cloud_local_id = model
+            # Set cloud_local_id to custom_llm_provider/model if custom_llm_provider not in model
+            if custom_llm_provider not in model:
+                cloud_local_id = f"{custom_llm_provider}/{model}"
+            else:
+                cloud_local_id = model
 
-        return self.create_from_components(
-            service_type=service_type,
-            provider=provider,
-            region=region,
-            owner_account_id=owner_account_id,
-            resource_type=resource_type,
-            cloud_local_id=cloud_local_id
-        )
+            # Validate cloud_local_id is not invalid
+            if not cloud_local_id or cloud_local_id.strip() == '' or cloud_local_id == '*':
+                error_msg = f"Cannot generate CZRN: cloud_local_id is invalid (empty, null, or '*'): {cloud_local_id}"
+                if error_tracker:
+                    error_tracker.add_error('INVALID_CLOUD_LOCAL_ID', error_msg, row, 'CZRN', 'model')
+                raise ValueError(error_msg)
+
+            # Extract the core model name to use as the resource-type field
+            resource_type = self.extract_model_name(model)
+
+            czrn = self.create_from_components(
+                provider=provider,
+                service_type=service_type,
+                region=region,
+                owner_account_id=owner_account_id,
+                resource_type=resource_type,
+                cloud_local_id=cloud_local_id
+            )
+
+            if error_tracker:
+                error_tracker.add_success()
+
+            return czrn
+
+        except Exception as e:
+            if error_tracker:
+                error_tracker.add_error('CZRN_GENERATION_FAILED', str(e), row, 'CZRN')
+            raise
 
     def create_from_components(
         self,
-        service_type: str,
         provider: str,
+        service_type: str,
         region: str,
         owner_account_id: str,
         resource_type: str,
-        cloud_local_id: str
+        cloud_local_id: str,
+        error_tracker=None,
+        source_data: dict = None
     ) -> str:
-        """Create a CZRN from individual components."""
-        # Normalize components to ensure they meet CZRN requirements
-        service_type = self._normalize_component(service_type, allow_uppercase=True)
-        provider = self._normalize_component(provider)
-        region = self._normalize_component(region)
-        owner_account_id = self._normalize_component(owner_account_id)
-        resource_type = self._normalize_component(resource_type)
-        # cloud_local_id can contain pipes and other characters, so don't normalize it
+        """Create a CZRN from individual components.
+        
+        Args:
+            provider: CZRN provider component
+            service_type: CZRN service-type component
+            region: CZRN region component
+            owner_account_id: CZRN owner-account-id component
+            resource_type: CZRN resource-type component
+            cloud_local_id: CZRN cloud-local-id component
+            error_tracker: Optional error tracker for consolidated error reporting
+            source_data: Optional source data for error context
+        """
+        try:
+            # Normalize components to ensure they meet CZRN requirements
+            provider = self._normalize_component(provider, allow_uppercase=True)
+            service_type = self._normalize_component(service_type)
+            region = self._normalize_component(region)
+            owner_account_id = self._normalize_component(owner_account_id)
+            resource_type = self._normalize_component(resource_type)
+            # cloud_local_id can contain pipes and other characters, so don't normalize it
 
-        czrn = f"czrn:{service_type}:{provider}:{region}:{owner_account_id}:{resource_type}:{cloud_local_id}"
+            czrn = f"czrn:{provider}:{service_type}:{region}:{owner_account_id}:{resource_type}:{cloud_local_id}"
 
-        if not self.is_valid(czrn):
-            raise ValueError(f"Generated CZRN is invalid: {czrn}")
+            if not self.is_valid(czrn):
+                error_msg = f"Generated CZRN is invalid: {czrn}"
+                if error_tracker and source_data:
+                    error_tracker.add_error('INVALID_CZRN_FORMAT', error_msg, source_data, 'CZRN')
+                raise ValueError(error_msg)
 
-        return czrn
+            return czrn
+
+        except Exception as e:
+            if error_tracker and source_data:
+                error_tracker.add_error('CZRN_COMPONENT_ERROR', str(e), source_data, 'CZRN')
+            raise
 
     def is_valid(self, czrn: str) -> bool:
         """Validate a CZRN string against the standard format."""
@@ -98,7 +177,7 @@ class CZRNGenerator:
     def extract_components(self, czrn: str) -> tuple[str, str, str, str, str, str]:
         """Extract all components from a CZRN.
         
-        Returns: (service_type, provider, region, owner_account_id, resource_type, cloud_local_id)
+        Returns: (provider, service_type, region, owner_account_id, resource_type, cloud_local_id)
         """
         match = self.CZRN_REGEX.match(czrn)
         if not match:
@@ -107,44 +186,31 @@ class CZRNGenerator:
         return match.groups()
 
     def _normalize_provider(self, provider: str) -> str:
-        """Normalize provider names to standard CZRN format."""
-        # Map common provider names to CZRN standards
-        provider_map = {
-            'openai': 'openai',
-            'anthropic': 'anthropic',
-            'azure': 'azure',
-            'azure-ai': 'azure',
-            'aws': 'aws',
-            'aws-bedrock': 'aws',
-            'gcp': 'gcp',
-            'google': 'gcp',
-            'cohere': 'cohere',
-            'huggingface': 'huggingface',
-            'replicate': 'replicate',
-            'together-ai': 'together-ai',
-            'unknown': 'unknown'
-        }
-
-        normalized = provider.lower().replace('_', '-')
-        return provider_map.get(normalized, normalized)
+        """Normalize provider names to standard CZRN format.
+        
+        Delegates to the transformations.normalize_provider function for maximum
+        reusability across the codebase.
+        
+        Args:
+            provider: Provider identifier (LiteLLM enum, string, or other type)
+            
+        Returns:
+            Normalized provider name as lowercase string
+        """
+        return normalize_provider(provider)
 
     def _normalize_component(self, component: str, allow_uppercase: bool = False) -> str:
-        """Normalize a CZRN component to meet format requirements."""
-        if not component:
-            return 'unknown'
-
-        # Convert to lowercase unless uppercase is allowed
-        if not allow_uppercase:
-            component = component.lower()
-
-        # Replace invalid characters with hyphens
-        component = re.sub(r'[^a-zA-Z0-9-]', '-', component)
-
-        # Remove consecutive hyphens
-        component = re.sub(r'-+', '-', component)
-
-        # Remove leading/trailing hyphens
-        component = component.strip('-')
-
-        return component or 'unknown'
+        """Normalize a CZRN component to meet format requirements.
+        
+        Delegates to the transformations.normalize_component function for maximum
+        reusability across the codebase.
+        
+        Args:
+            component: Raw component string to normalize
+            allow_uppercase: Whether to preserve uppercase characters
+            
+        Returns:
+            Normalized component string safe for CZRN usage
+        """
+        return normalize_component(component, allow_uppercase)
 

@@ -144,6 +144,7 @@ def transmit(
     timezone: Annotated[Optional[str], typer.Option("--timezone", help="Timezone for date handling (e.g., 'US/Eastern', 'UTC'). Defaults to UTC")] = None,
     test: Annotated[bool, typer.Option("--test", help="Test mode: process only 5 records and show JSON payloads instead of transmitting (API keys still required)")] = False,
     limit: Annotated[Optional[int], typer.Option("--limit", help="Limit number of records to process (default: all records)")] = None,
+    disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
 ) -> None:
     """Transform LiteLLM data and transmit to CloudZero AnyCost API.
     
@@ -190,7 +191,12 @@ def transmit(
         # Parse date specification and determine date range
         date_filter = _parse_date_specification(mode, date_spec, user_timezone)
 
-        database = CachedLiteLLMDatabase(db_connection)
+        # Choose database implementation based on cache setting
+        if disable_cache:
+            database = LiteLLMDatabase(db_connection)
+            console.print("[dim]Cache disabled - using direct database connection[/dim]")
+        else:
+            database = CachedLiteLLMDatabase(db_connection)
 
         console.print(f"[blue]Loading {mode} data from LiteLLM database...[/blue]")
         if date_filter:
@@ -237,8 +243,11 @@ def analyze_data(
     force_refresh: Annotated[bool, typer.Option("--force-refresh", help="Force refresh cache from server")] = False,
     show_raw: Annotated[bool, typer.Option("--show-raw", help="Show raw data tables instead of analysis")] = False,
     table: Annotated[Optional[str], typer.Option("--table", help="Show specific table only (for --show-raw): 'user', 'team', 'tag', or 'all'")] = "all",
+    csv_output: Annotated[bool, typer.Option("--csv", help="Export raw table data to CSV files (requires --show-raw)")] = False,
+    disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
+    disable_czrn: Annotated[bool, typer.Option("--disable-czrn", help="Disable CZRN generation analysis")] = False,
 ) -> None:
-    """Analyze LiteLLM database data and show insights, or display raw data tables."""
+    """Comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation."""
 
     # Load configuration
     config = Config()
@@ -254,29 +263,42 @@ def analyze_data(
         console.print("[red]Error: --table must be one of: all, user, team, tag[/red]")
         raise typer.Exit(1)
 
-    try:
-        # Use cached database
-        database = CachedLiteLLMDatabase(db_connection)
+    if csv_output and not show_raw:
+        console.print("[red]Error: --csv requires --show-raw to be enabled[/red]")
+        raise typer.Exit(1)
 
-        if database.is_offline_mode():
-            console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
+    try:
+        # Choose database implementation based on cache setting
+        if disable_cache:
+            database = LiteLLMDatabase(db_connection)
+            console.print("[dim]Cache disabled - using direct database connection[/dim]")
+        else:
+            database = CachedLiteLLMDatabase(db_connection)
+            if database.is_offline_mode():
+                console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
 
         if show_raw:
             # Show raw data tables (former show-data functionality)
             if table == "all":
-                console.print(f"[blue]Showing {limit:,} records from each LiteLLM table...[/blue]")
-                _show_all_tables_data_cached(database, limit, force_refresh)
+                if csv_output:
+                    console.print(f"[blue]Exporting {limit:,} records from each LiteLLM table to CSV files...[/blue]")
+                else:
+                    console.print(f"[blue]Showing {limit:,} records from each LiteLLM table...[/blue]")
+                _show_all_tables_data_cached(database, limit, force_refresh, csv_output)
             else:
-                console.print(f"[blue]Showing {limit:,} records from LiteLLM_{table.title()}Spend table...[/blue]")
-                _show_single_table_data_cached(database, table, limit, force_refresh)
+                if csv_output:
+                    console.print(f"[blue]Exporting {limit:,} records from LiteLLM_{table.title()}Spend table to CSV file...[/blue]")
+                else:
+                    console.print(f"[blue]Showing {limit:,} records from LiteLLM_{table.title()}Spend table...[/blue]")
+                _show_single_table_data_cached(database, table, limit, force_refresh, csv_output)
         else:
-            # Show data analysis (former analysis functionality)
-            console.print(f"[blue]Running data analysis on {limit:,} records...[/blue]")
+            # Show comprehensive data analysis including CZRN generation
+            console.print(f"[blue]Running comprehensive analysis on {limit:,} records...[/blue]")
             analyzer = DataAnalyzer(database)
-            results = analyzer.analyze(limit=limit, force_refresh=force_refresh)
+            results = analyzer.analyze(limit=limit, force_refresh=force_refresh, show_czrn_analysis=not disable_czrn)
 
-            console.print("\n[bold]Analysis Results:[/bold]")
-            console.print("=" * 50)
+            console.print("\n[bold]Comprehensive Data Analysis:[/bold]")
+            console.print("=" * 60)
             analyzer.print_results(results)
 
             if json_output:
@@ -289,43 +311,10 @@ def analyze_data(
         raise typer.Exit(1)
 
 
-@analyze_app.command("czrn")
-def analyze_czrn(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-    limit: Annotated[int, typer.Option("--limit", help="Number of records to analyze for CZRN generation")] = 10000,
-    force_refresh: Annotated[bool, typer.Option("--force-refresh", help="Force refresh cache from server")] = False,
-) -> None:
-    """Analyze CZRN generation from LiteLLM database data."""
-
-    # Load configuration
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
-    try:
-        # Use cached database
-        database = CachedLiteLLMDatabase(db_connection)
-
-        if database.is_offline_mode():
-            console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
-
-        console.print(f"[blue]Running CZRN analysis on {limit:,} records...[/blue]")
-        analyzer = DataAnalyzer(database)
-        analyzer.czrn_analysis(limit=limit, force_refresh=force_refresh)
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
 
 
 
-
-def _show_all_tables_data_cached(database: CachedLiteLLMDatabase, limit: int, force_refresh: bool) -> None:
+def _show_all_tables_data_cached(database: CachedLiteLLMDatabase, limit: int, force_refresh: bool, csv_output: bool = False) -> None:
     """Show data from all three LiteLLM tables individually using cache."""
 
     # If force refresh, make sure we refresh the cache first
@@ -335,14 +324,15 @@ def _show_all_tables_data_cached(database: CachedLiteLLMDatabase, limit: int, fo
         except Exception:
             pass  # Ignore errors during refresh, will show cached data
 
-    # Show table breakdown first
+    # Show table breakdown first (unless in CSV mode)
     table_info = database.get_table_info()
     breakdown = table_info['table_breakdown']
-    console.print("\n[bold blue]📊 Table Overview[/bold blue]")
-    console.print(f"  User records: {breakdown['user_spend']:,}")
-    console.print(f"  Team records: {breakdown['team_spend']:,}")
-    console.print(f"  Tag records: {breakdown['tag_spend']:,}")
-    console.print(f"  Total records: {sum(breakdown.values()):,}")
+    if not csv_output:
+        console.print("\n[bold blue]📊 Table Overview[/bold blue]")
+        console.print(f"  User records: {breakdown['user_spend']:,}")
+        console.print(f"  Team records: {breakdown['team_spend']:,}")
+        console.print(f"  Tag records: {breakdown['tag_spend']:,}")
+        console.print(f"  Total records: {sum(breakdown.values()):,}")
 
     # Show each table individually
     tables_to_show = [
@@ -353,39 +343,54 @@ def _show_all_tables_data_cached(database: CachedLiteLLMDatabase, limit: int, fo
 
     for table_type, table_name, emoji in tables_to_show:
         if breakdown[f'{table_type}_spend'] > 0:
-            console.print(f"\n[bold green]{emoji} {table_name}[/bold green]")
-            _show_single_table_data_cached(database, table_type, limit, force_refresh)
+            if not csv_output:
+                console.print(f"\n[bold green]{emoji} {table_name}[/bold green]")
+            _show_single_table_data_cached(database, table_type, limit, force_refresh, csv_output)
         else:
-            console.print(f"\n[bold yellow]{emoji} {table_name}[/bold yellow]")
-            console.print(f"[dim]No records found in {table_name}[/dim]")
+            if not csv_output:
+                console.print(f"\n[bold yellow]{emoji} {table_name}[/bold yellow]")
+                console.print(f"[dim]No records found in {table_name}[/dim]")
 
 
-def _show_single_table_data_cached(database: CachedLiteLLMDatabase, table_type: str, limit: int, force_refresh: bool) -> None:
-    """Show data from a specific LiteLLM table using cache."""
+def _show_single_table_data_cached(database: CachedLiteLLMDatabase, table_type: str, limit: int, force_refresh: bool, csv_output: bool = False) -> None:
+    """Show data from a specific LiteLLM table using cache or export to CSV."""
+    from pathlib import Path
+
     from rich.box import SIMPLE
     from rich.table import Table
 
     table_name = f"LiteLLM_Daily{table_type.title()}Spend"
-    console.print(f"\n[bold green]📋 Raw Data from {table_name}[/bold green]")
+
+    if not csv_output:
+        console.print(f"\n[bold green]📋 Raw Data from {table_name}[/bold green]")
 
     # Get data from cache filtered by entity type
     data = database.get_individual_table_data(table_type, limit=limit, force_refresh=force_refresh)
 
     if not data.is_empty():
-        table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
+        if csv_output:
+            # Export to CSV
+            csv_filename = f"{table_name}.csv"
+            csv_path = Path(csv_filename)
+            data.write_csv(csv_path)
+            console.print(f"[green]✓ Exported {len(data):,} records from {table_name} to {csv_path}[/green]")
+        else:
+            # Show table in console
+            table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
 
-        # Add columns dynamically based on data
-        for col in data.columns:
-            table.add_column(col, style="white", no_wrap=False)
+            # Add columns dynamically based on data
+            for col in data.columns:
+                table.add_column(col, style="white", no_wrap=False)
 
-        # Add rows
-        for row in data.to_dicts():
-            table.add_row(*[str(row.get(col, '')) for col in data.columns])
+            # Add rows
+            for row in data.to_dicts():
+                table.add_row(*[str(row.get(col, '')) for col in data.columns])
 
-        console.print(table)
-        console.print(f"[dim]💡 Showing {len(data):,} records from {table_name}[/dim]")
+            console.print(table)
+            console.print(f"[dim]💡 Showing {len(data):,} records from {table_name}[/dim]")
     else:
-        console.print(f"[yellow]No data found in {table_name}[/yellow]")
+        if not csv_output:
+            console.print(f"[yellow]No data found in {table_name}[/yellow]")
 
 
 cache_app = typer.Typer(help="Cache management commands")
@@ -577,6 +582,7 @@ def analyze_spend(
     db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Number of records to analyze for spend analysis")] = 10000,
     force_refresh: Annotated[bool, typer.Option("--force-refresh", help="Force refresh cache from server")] = False,
+    disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
 ) -> None:
     """Analyze spending patterns based on LiteLLM team and user data."""
 
@@ -591,11 +597,14 @@ def analyze_spend(
         raise typer.Exit(1)
 
     try:
-        # Use cached database
-        database = CachedLiteLLMDatabase(db_connection)
-
-        if database.is_offline_mode():
-            console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
+        # Choose database implementation based on cache setting
+        if disable_cache:
+            database = LiteLLMDatabase(db_connection)
+            console.print("[dim]Cache disabled - using direct database connection[/dim]")
+        else:
+            database = CachedLiteLLMDatabase(db_connection)
+            if database.is_offline_mode():
+                console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
 
         console.print(f"[blue]Running spend analysis on {limit:,} records...[/blue]")
         analyzer = DataAnalyzer(database)

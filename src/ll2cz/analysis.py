@@ -29,6 +29,7 @@ from rich.table import Table
 from .cached_database import CachedLiteLLMDatabase
 from .czrn import CZRNGenerator
 from .database import LiteLLMDatabase
+from .error_tracking import ConsolidatedErrorTracker
 from .transform import CBFTransformer
 
 
@@ -40,8 +41,14 @@ class DataAnalyzer:
         self.database = database
         self.console = Console()
 
-    def analyze(self, limit: int = 10000, force_refresh: bool = False) -> dict[str, Any]:
-        """Perform comprehensive analysis of LiteLLM data."""
+    def analyze(self, limit: int = 10000, force_refresh: bool = False, show_czrn_analysis: bool = True) -> dict[str, Any]:
+        """Perform comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation.
+        
+        Args:
+            limit: Number of records to analyze
+            force_refresh: Force refresh cache from server
+            show_czrn_analysis: Whether to include detailed CZRN generation analysis
+        """
         if isinstance(self.database, CachedLiteLLMDatabase):
             raw_data = self.database.get_usage_data(limit=limit, force_refresh=force_refresh)
         else:
@@ -59,13 +66,19 @@ class DataAnalyzer:
             cbf_data = transformer.transform(sample_data)
             cbf_examples = cbf_data.to_dicts() if not cbf_data.is_empty() else []
 
+        # CZRN analysis data (if requested)
+        czrn_analysis_data = None
+        if show_czrn_analysis and not data.is_empty():
+            czrn_analysis_data = self._perform_czrn_analysis(data)
+
         return {
             'table_info': table_info,
             'data_summary': self._analyze_data_summary(data),
             'column_analysis': self._analyze_columns(data),
             'sample_records': data.head(5).to_dicts() if not data.is_empty() else [],
             'cbf_examples': cbf_examples,
-            'filter_summary': filter_summary
+            'filter_summary': filter_summary,
+            'czrn_analysis': czrn_analysis_data
         }
 
     def _analyze_data_summary(self, data: pl.DataFrame) -> dict[str, Any]:
@@ -247,148 +260,115 @@ class DataAnalyzer:
                     entity_parts.append(f"{entity_type}: {count:,}")
                 self.console.print(f"  Entities: {', '.join(entity_parts)}")
 
-        # Column Analysis - more compact
-        self.console.print("\n[bold cyan]🗂️  Column Analysis[/bold cyan]")
+        # 3. SOURCE DATA FIELD ANALYSIS WITH CZRN/CBF MAPPINGS
+        if analysis.get('czrn_analysis'):
+            czrn_data = analysis['czrn_analysis']
+            if czrn_data.get('field_analysis'):
+                czrn_data['error_tracker'].print_source_field_analysis(czrn_data['field_analysis'])
+        else:
+            # Fallback to basic column analysis if CZRN analysis not available
+            self._print_basic_column_analysis(column_analysis)
 
-        # Use a compact table with lightweight formatting, no width limits to prevent truncation
-        from rich.box import SIMPLE
-        columns_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
-        columns_table.add_column("Column", style="cyan", no_wrap=False)
-        columns_table.add_column("Type", style="magenta", no_wrap=False)
-        columns_table.add_column("Unique", justify="right", style="blue", no_wrap=False)
-        columns_table.add_column("Null", justify="right", style="red", no_wrap=False)
-        columns_table.add_column("Sample/Stats", style="dim", no_wrap=False)
+        # 4. CZRN GENERATION ANALYSIS
+        if analysis.get('czrn_analysis'):
+            czrn_data = analysis['czrn_analysis']
+            self.console.print("\n[bold yellow]🔗 CZRN Generation Analysis[/bold yellow]")
+            self.console.print(f"[green]✓ {len(czrn_data['successful_czrns']):,} unique CZRNs generated from {czrn_data['total_operations']:,} total records[/green]")
 
-        for column, stats in column_analysis.items():
-            stats_text = ""
+            # Error reporting
+            czrn_data['error_tracker'].print_error_summary()
+            czrn_data['error_tracker'].print_detailed_errors()
 
-            if 'top_values' in stats:
-                top_items = list(stats['top_values'].items())  # Show ALL items, no truncation
-                stats_text = ", ".join([f"'{k}': {v}" for k, v in top_items])
+            # Show successful CZRNs
+            if czrn_data['successful_czrns']:
+                self._print_deduplicated_czrn_list(list(czrn_data['successful_czrns']))
 
-            elif 'stats' in stats:
-                stats_info = stats['stats']
-                stats_text = f"min: {stats_info['min']}, max: {stats_info['max']}, mean: {stats_info['mean']:.4f}"
-
-            # Show full column name - no truncation
-            columns_table.add_row(
-                column,
-                stats['data_type'].replace("String", "Str").replace("Datetime", "Date"),  # Shorter types
-                f"{stats['unique_count']:,}",
-                f"{stats['null_count']:,}",
-                stats_text
-            )
-
-        self.console.print(columns_table)
-
-        # CBF Transformation Examples
+        # 5. CBF TRANSFORMATION EXAMPLES
         if analysis.get('cbf_examples'):
             self._print_cbf_examples(analysis['cbf_examples'])
 
     def _print_cbf_examples(self, cbf_examples: list[dict[str, Any]]) -> None:
-        """Print CloudZero CBF transformation examples in spreadsheet format."""
+        """Print CloudZero CBF transformation examples showing all standard CBF columns."""
         self.console.print("\n[bold yellow]💰 CBF Transformation Examples[/bold yellow]")
 
-        # Create compact spreadsheet-like table with lightweight formatting, no width limits to prevent truncation
+        if not cbf_examples:
+            self.console.print("[dim]No CBF examples available[/dim]")
+            return
+
+        # Create table showing all standard CBF columns with wider console
         from rich.box import SIMPLE_HEAVY
-        cbf_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE_HEAVY, padding=(0, 1))
-        cbf_table.add_column("Date", style="blue", no_wrap=False)
-        cbf_table.add_column("Cost", style="green", justify="right", no_wrap=False)
-        cbf_table.add_column("Resource ID", style="magenta", no_wrap=False)
-        cbf_table.add_column("Tokens", style="yellow", justify="right", no_wrap=False)
-        cbf_table.add_column("Entity", style="cyan", no_wrap=False)
-        cbf_table.add_column("Model", style="white", no_wrap=False)
-        cbf_table.add_column("Provider", style="dim", no_wrap=False)
+        from rich.console import Console
+
+        cbf_table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            box=SIMPLE_HEAVY,
+            padding=(0, 1),
+            expand=False,
+            min_width=None,
+            width=None
+        )
+
+        # Add columns for all standard CBF fields using actual CBF column names
+        cbf_table.add_column("time/usage_start", style="blue", no_wrap=True, min_width=12)
+        cbf_table.add_column("cost/cost", style="green", justify="right", no_wrap=True, min_width=10)
+        cbf_table.add_column("resource/id", style="magenta", no_wrap=False, min_width=25)
+        cbf_table.add_column("usage/amount", style="yellow", justify="right", no_wrap=True, min_width=12)
+        cbf_table.add_column("usage/units", style="yellow", no_wrap=True, min_width=11)
+        cbf_table.add_column("resource/service", style="cyan", no_wrap=True, min_width=15)
+        cbf_table.add_column("resource/account", style="purple", no_wrap=True, min_width=15)
+        cbf_table.add_column("resource/region", style="orange1", no_wrap=True, min_width=14)
+        cbf_table.add_column("resource/usage_family", style="bright_blue", no_wrap=True, min_width=20)
+        cbf_table.add_column("lineitem/type", style="dim", no_wrap=True, min_width=12)
+        cbf_table.add_column("Tag Count", style="white", justify="right", no_wrap=True, min_width=9)
 
         for cbf_record in cbf_examples:
-            # Extract key information using current CBF field names
+            # Extract all standard CBF fields
             date_full = str(cbf_record.get('time/usage_start', 'N/A'))
-            # Extract just the date part but show it completely
             date = date_full.split('T')[0] if 'T' in date_full else date_full
+
             cost = f"${cbf_record.get('cost/cost', 0):.6f}"
-            resource_id = str(cbf_record.get('resource/id', 'N/A'))  # Show full resource_id
+            resource_id = str(cbf_record.get('resource/id', 'N/A'))
+            usage_amount = f"{cbf_record.get('usage/amount', 0):,}"
+            usage_units = str(cbf_record.get('usage/units', 'N/A'))
+            service = str(cbf_record.get('resource/service', 'N/A'))
+            account = str(cbf_record.get('resource/account', 'N/A'))
+            region = str(cbf_record.get('resource/region', 'N/A'))
+            usage_family = str(cbf_record.get('resource/usage_family', 'N/A'))
+            lineitem_type = str(cbf_record.get('lineitem/type', 'N/A'))
 
-            tokens = f"{cbf_record.get('usage/amount', 0):,}"
-
-            # Extract resource tags (dimensions are now stored as resource/tag: fields)
-            entity_type = cbf_record.get('resource/tag:entity_type', 'N/A')
-            entity_id = cbf_record.get('resource/tag:entity_id', '')
-            entity = f"{entity_type}\n{entity_id}" if entity_id else entity_type
-
-            model = cbf_record.get('resource/tag:model', 'N/A')  # Show full model name
-            provider = cbf_record.get('resource/tag:provider', 'N/A')
+            # Count resource/tag columns
+            tag_count = sum(1 for key in cbf_record.keys() if key.startswith('resource/tag:'))
 
             cbf_table.add_row(
                 date,
                 cost,
                 resource_id,
-                tokens,
-                entity,
-                model,
-                provider
+                usage_amount,
+                usage_units,
+                service,
+                account,
+                region,
+                usage_family,
+                lineitem_type,
+                str(tag_count)
             )
 
-        self.console.print(cbf_table)
+        # Print table with wider console to avoid truncation
+        wider_console = Console(width=250, force_terminal=True)
+        wider_console.print(cbf_table)
 
-        # Summary message - more compact
+        # Summary message with tag information
         total_records = len(cbf_examples)
-        self.console.print(f"\n[dim]💡 {total_records} sample CBF record(s) • Use --csv or --cz-api-key to export all data[/dim]")
-
-    def czrn_analysis(self, limit: int | None = 10000, force_refresh: bool = False) -> None:
-        """Perform CZRN-focused analysis showing resource ID generation."""
-        if limit is None:
-            self.console.print("\n[bold yellow]🔗 CZRN Analysis - Processing all records[/bold yellow]")
+        if cbf_examples:
+            sample_tag_count = sum(1 for key in cbf_examples[0].keys() if key.startswith('resource/tag:'))
+            self.console.print(f"\n[dim]💡 {total_records} sample CBF record(s) with {sample_tag_count} resource tags each • Use --csv or --cz-api-key to export all data[/dim]")
         else:
-            self.console.print(f"\n[bold yellow]🔗 CZRN Analysis - Processing {limit} records[/bold yellow]")
+            self.console.print(f"\n[dim]💡 {total_records} sample CBF record(s) • Use --csv or --cz-api-key to export all data[/dim]")
 
-        # Get sample data
-        if isinstance(self.database, CachedLiteLLMDatabase):
-            raw_data = self.database.get_usage_data(limit=limit, force_refresh=force_refresh)
-        else:
-            raw_data = self.database.get_usage_data(limit=limit)
-
-        # Filter data and show filtering summary
-        data, filter_summary = self._filter_successful_requests(raw_data)
-
-        # Show filter summary
-        if filter_summary['removed_count'] > 0:
-            self.console.print(f"[dim]Filtered {filter_summary['filtered_count']:,} records (removed {filter_summary['removed_count']:,} with 0 successful requests)[/dim]")
-        else:
-            self.console.print(f"[dim]Processing {filter_summary['filtered_count']:,} records (no filtering needed)[/dim]")
-
-        if data.is_empty():
-            self.console.print("[yellow]No data available for CZRN analysis after filtering[/yellow]")
-            return
-
-        # Generate CZRNs for the sample data
-        czrn_generator = CZRNGenerator()
-        czrn_results = []
-
-        for row in data.to_dicts():
-            try:
-                czrn = czrn_generator.create_from_litellm_data(row)
-                czrn_results.append({
-                    'czrn': czrn,
-                    'source_data': row
-                })
-            except Exception as e:
-                czrn_results.append({
-                    'czrn': f"ERROR: {str(e)}",
-                    'source_data': row
-                })
-
-        # Show CZRN component breakdown first
-        self._print_czrn_component_analysis(czrn_results)
-
-        # Display results as a simple list
-        self._print_czrn_list(czrn_results)
-
-        # Show detailed error information if any errors occurred
-        self._print_czrn_errors(czrn_results)
 
     def _print_czrn_list(self, czrn_results: list[dict[str, Any]]) -> None:
         """Print generated CZRNs as a deduplicated table with aligned components."""
-        self.console.print("\n[bold green]📝 Generated CZRNs (Deduplicated)[/bold green]")
 
         # Group results by CZRN for deduplication
         czrn_groups = {}
@@ -408,6 +388,13 @@ class DataAnalyzer:
             else:
                 successful_czrns[czrn] = group
 
+        # Display error CZRNs first
+        if error_czrns:
+            self.console.print("\n[bold red]❌ CZRN Generation Errors Summary[/bold red]")
+            for i, (czrn, group) in enumerate(error_czrns.items(), 1):
+                clean_error = czrn.replace('ERROR: ', '')
+                self.console.print(f"[red]{i:3d}. {clean_error}[/red] [dim]({len(group)} records)[/dim]")
+
         # Display successful CZRNs in a formatted table
         if successful_czrns:
             from rich.box import SIMPLE
@@ -422,29 +409,29 @@ class DataAnalyzer:
                 expand=False,
                 min_width=None,
                 width=None,
-                overflow="ellipsis"
             )
             czrn_table.add_column("#", style="green", justify="right", no_wrap=True)
-            czrn_table.add_column("Service", style="blue", no_wrap=True)
-            czrn_table.add_column("Provider", style="yellow", no_wrap=True)
+            czrn_table.add_column("Provider", style="blue", no_wrap=True)
+            czrn_table.add_column("Service Type", style="yellow", no_wrap=True)
             czrn_table.add_column("Region", style="magenta", no_wrap=True)
             czrn_table.add_column("Owner Account", style="cyan", no_wrap=True)
-            czrn_table.add_column("Resource", style="green", no_wrap=True)
+            czrn_table.add_column("Resource Type", style="green", no_wrap=True)
             czrn_table.add_column("Local ID", style="white", no_wrap=True)
             czrn_table.add_column("Records", style="dim", justify="right", no_wrap=True)
 
             czrn_generator = CZRNGenerator()
 
+            self.console.print("\n[bold green]📝 Generated CZRNs (Deduplicated)[/bold green]")
             for i, (czrn, group) in enumerate(sorted(successful_czrns.items()), 1):
                 try:
                     # Parse CZRN components
-                    service_type, provider, region, owner_account_id, resource_type, cloud_local_id = czrn_generator.extract_components(czrn)
+                    provider, service_type, region, owner_account_id, resource_type, cloud_local_id = czrn_generator.extract_components(czrn)
 
                     # Display full components without truncation
                     czrn_table.add_row(
                         str(i),
-                        service_type,
                         provider,
+                        service_type,
                         region,
                         owner_account_id,
                         resource_type,
@@ -465,18 +452,9 @@ class DataAnalyzer:
                     )
 
             # Print table with wider console to avoid truncation
-            self.console.print(czrn_table)
-            # Create a temporary wider console if needed
             from rich.console import Console
-            temp_console = Console(width=200, force_terminal=True)
-            temp_console.print(czrn_table)
-
-        # Display error CZRNs separately
-        if error_czrns:
-            self.console.print("\n[bold red]❌ Error CZRNs[/bold red]")
-            for i, (czrn, group) in enumerate(error_czrns.items(), 1):
-                clean_error = czrn.replace('ERROR: ', '')
-                self.console.print(f"[red]{i:3d}. {clean_error}[/red] [dim]({len(group)} records)[/dim]")
+            wider_console = Console(width=200, force_terminal=True)
+            wider_console.print(czrn_table)
 
         # Summary
         total_records = len(czrn_results)
@@ -540,8 +518,6 @@ class DataAnalyzer:
                 entity_id = str(source.get('entity_id', 'N/A'))
 
                 api_key = str(source.get('api_key', 'N/A'))
-                if len(api_key) > 20:
-                    api_key = api_key[:8] + "..." + api_key[-4:]  # Show prefix and suffix
 
                 model = str(source.get('model', 'N/A'))
                 model_group = str(source.get('model_group', 'N/A'))
@@ -578,6 +554,75 @@ class DataAnalyzer:
 
             self.console.print()  # Add spacing between CZRNs
 
+    def _perform_czrn_analysis(self, data: pl.DataFrame) -> dict[str, Any]:
+        """Perform CZRN analysis on the provided data and return analysis results."""
+        # Initialize consolidated error tracker
+        error_tracker = ConsolidatedErrorTracker()
+
+        # Source data field analysis
+        field_analysis = error_tracker.analyze_source_fields(data)
+
+        # Generate CZRNs for the data with error tracking
+        czrn_generator = CZRNGenerator()
+        successful_czrns = set()  # For deduplication
+
+        for row in data.to_dicts():
+            error_tracker.increment_total()
+            try:
+                czrn = czrn_generator.create_from_litellm_data(row, error_tracker)
+                successful_czrns.add(czrn)
+            except Exception:
+                # Error already tracked by czrn_generator
+                continue
+
+        return {
+            'error_tracker': error_tracker,
+            'field_analysis': field_analysis,
+            'successful_czrns': successful_czrns,
+            'total_operations': error_tracker.total_operations
+        }
+
+    def _print_basic_column_analysis(self, column_analysis: dict[str, dict[str, Any]]) -> None:
+        """Print basic column analysis when CZRN analysis is not available."""
+        self.console.print("\n[bold cyan]🗂️  Column Analysis[/bold cyan]")
+
+        # Use a compact table with lightweight formatting, no width limits to prevent truncation
+        from rich.box import SIMPLE
+        columns_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
+        columns_table.add_column("Column", style="cyan", no_wrap=False)
+        columns_table.add_column("Type", style="magenta", no_wrap=False)
+        columns_table.add_column("Unique", justify="right", style="blue", no_wrap=False)
+        columns_table.add_column("Null", justify="right", style="red", no_wrap=False)
+        columns_table.add_column("Sample/Stats", style="dim", no_wrap=False)
+
+        for column, stats in column_analysis.items():
+            stats_text = ""
+
+            if 'top_values' in stats:
+                top_items = list(stats['top_values'].items())  # Show ALL items, no truncation
+                stats_text = ", ".join([f"'{k}': {v}" for k, v in top_items])
+
+            elif 'stats' in stats:
+                stats_info = stats['stats']
+                stats_text = f"min: {stats_info['min']}, max: {stats_info['max']}, mean: {stats_info['mean']:.4f}"
+
+            # Show full column name - no truncation
+            columns_table.add_row(
+                column,
+                stats['data_type'].replace("String", "Str").replace("Datetime", "Date"),  # Shorter types
+                f"{stats['unique_count']:,}",
+                f"{stats['null_count']:,}",
+                stats_text
+            )
+
+        self.console.print(columns_table)
+
+    def get_error_tracker(self) -> ConsolidatedErrorTracker:
+        """Get the current error tracker instance."""
+        # Create transformer to access its error tracker
+        transformer = CBFTransformer()
+        return transformer.error_tracker
+
     def _print_czrn_component_analysis(self, czrn_results: list[dict[str, Any]]) -> None:
         """Print analysis of CZRN components."""
         self.console.print("\n[bold yellow]🧩 CZRN Component Analysis[/bold yellow]")
@@ -600,11 +645,11 @@ class DataAnalyzer:
         for result in valid_czrns:
             try:
                 components = czrn_generator.extract_components(result['czrn'])
-                service_type, provider, region, owner_account_id, resource_type, cloud_local_id = components
+                provider, service_type, region, owner_account_id, resource_type, cloud_local_id = components
 
                 # Count component frequencies
-                component_stats['service_type'][service_type] = component_stats['service_type'].get(service_type, 0) + 1
                 component_stats['provider'][provider] = component_stats['provider'].get(provider, 0) + 1
+                component_stats['service_type'][service_type] = component_stats['service_type'].get(service_type, 0) + 1
                 component_stats['region'][region] = component_stats['region'].get(region, 0) + 1
                 component_stats['owner_account_id'][owner_account_id] = component_stats['owner_account_id'].get(owner_account_id, 0) + 1
                 component_stats['resource_type'][resource_type] = component_stats['resource_type'].get(resource_type, 0) + 1
@@ -652,7 +697,7 @@ class DataAnalyzer:
         if error_count > 0:
             self.console.print(f"[red]✗ {error_count} generation errors[/red]")
 
-        self.console.print("\n[dim]💡 CZRNs follow format: czrn:service-type:provider:region:owner-account-id:resource-type:cloud-local-id[/dim]")
+        self.console.print("\n[dim]💡 CZRNs follow format: czrn:provider:service-type:region:owner-account-id:resource-type:cloud-local-id[/dim]")
         self.console.print("[dim]🔍 Use generated CZRNs as resource_id values in CloudZero CBF records[/dim]")
 
     def _print_czrn_errors(self, czrn_results: list[dict[str, Any]]) -> None:
@@ -663,7 +708,6 @@ class DataAnalyzer:
         if not error_results:
             return
 
-        self.console.print("\n[bold red]❌ CZRN Generation Errors[/bold red]")
         self.console.print(f"[yellow]Found {len(error_results)} record(s) with generation errors:[/yellow]\n")
 
         # Group errors by error message
@@ -697,10 +741,8 @@ class DataAnalyzer:
                     elif field_value == "":
                         formatted_value = "[dim red]EMPTY[/dim red]"
                     elif isinstance(field_value, str):
-                        # Truncate very long strings but keep API keys readable
-                        if field_name == 'api_key' and len(str(field_value)) > 20:
-                            formatted_value = f"[red]{str(field_value)[:8]}...{str(field_value)[-4:]}[/red]"
-                        elif len(str(field_value)) > 100:
+                        # Truncate very long strings but show API keys in full
+                        if len(str(field_value)) > 100:
                             formatted_value = f"[white]{str(field_value)[:97]}...[/white]"
                         else:
                             formatted_value = f"[white]{str(field_value)}[/white]"
@@ -729,11 +771,11 @@ class DataAnalyzer:
         else:
             self.console.print(f"\n[bold blue]💰 Spend Analysis - Processing {limit} records[/bold blue]")
 
-        # Get data from cache/database
+        # Get data from cache/database - use spend analysis data to include both user and team data
         if isinstance(self.database, CachedLiteLLMDatabase):
-            raw_data = self.database.get_usage_data(limit=limit, force_refresh=force_refresh)
+            raw_data = self.database.get_spend_analysis_data(limit=limit, force_refresh=force_refresh)
         else:
-            raw_data = self.database.get_usage_data(limit=limit)
+            raw_data = self.database.get_spend_analysis_data(limit=limit)
 
         # Filter data and show filtering summary
         data, filter_summary = self._filter_successful_requests(raw_data)
@@ -1010,4 +1052,61 @@ class DataAnalyzer:
 
         self.console.print(f"\n[bold cyan]📅 Recent Activity (Last {len(recent_days)} Days)[/bold cyan]")
         self.console.print(trend_table)
+
+    def _print_deduplicated_czrn_list(self, czrns: list[str]) -> None:
+        """Print a deduplicated list of CZRNs in a formatted table."""
+        czrn_generator = CZRNGenerator()
+
+        # Create table with no width constraints to show all data
+        from rich.box import SIMPLE
+        from rich.table import Table
+
+        czrn_table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            box=SIMPLE,
+            padding=(0, 1),
+            expand=False,
+            min_width=None,
+            width=None,
+        )
+        czrn_table.add_column("#", style="green", justify="right", no_wrap=True)
+        czrn_table.add_column("Provider", style="blue", no_wrap=True)
+        czrn_table.add_column("Service Type", style="yellow", no_wrap=True)
+        czrn_table.add_column("Region", style="magenta", no_wrap=True)
+        czrn_table.add_column("Owner Account", style="cyan", no_wrap=True)
+        czrn_table.add_column("Resource Type", style="green", no_wrap=True)
+        czrn_table.add_column("Local ID", style="white", no_wrap=True)
+
+        for i, czrn in enumerate(sorted(czrns), 1):
+            try:
+                # Parse CZRN components
+                provider, service_type, region, owner_account_id, resource_type, cloud_local_id = czrn_generator.extract_components(czrn)
+
+                # Display full components without truncation
+                czrn_table.add_row(
+                    str(i),
+                    provider,
+                    service_type,
+                    region,
+                    owner_account_id,
+                    resource_type,
+                    cloud_local_id
+                )
+            except Exception:
+                # Fallback for malformed CZRNs
+                czrn_table.add_row(
+                    str(i),
+                    "[red]MALFORMED[/red]",
+                    "",
+                    "",
+                    "",
+                    "",
+                    czrn
+                )
+
+        # Print table with wider console to avoid truncation
+        from rich.console import Console
+        wider_console = Console(width=200, force_terminal=True)
+        wider_console.print(czrn_table)
 

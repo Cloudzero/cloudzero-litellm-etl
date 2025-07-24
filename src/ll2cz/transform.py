@@ -18,12 +18,13 @@
 
 """Transform LiteLLM data to CloudZero AnyCost CBF format."""
 
-from datetime import datetime
 from typing import Any
 
 import polars as pl
 
 from .czrn import CZRNGenerator
+from .error_tracking import ConsolidatedErrorTracker
+from .transformations import parse_date
 
 
 class CBFTransformer:
@@ -32,11 +33,21 @@ class CBFTransformer:
     def __init__(self):
         """Initialize transformer with CZRN generator."""
         self.czrn_generator = CZRNGenerator()
+        self.error_tracker = ConsolidatedErrorTracker()
 
-    def transform(self, data: pl.DataFrame) -> pl.DataFrame:
-        """Transform LiteLLM data to CBF format, dropping records with zero successful_requests or invalid CZRNs."""
+    def transform(self, data: pl.DataFrame, use_error_tracking: bool = False) -> pl.DataFrame:
+        """Transform LiteLLM data to CBF format, dropping records with zero successful_requests or invalid CZRNs.
+
+        Args:
+            data: Input LiteLLM data
+            use_error_tracking: Whether to use consolidated error tracking
+        """
         if data.is_empty():
             return pl.DataFrame()
+
+        # Reset error tracker for new transformation
+        if use_error_tracking:
+            self.error_tracker = ConsolidatedErrorTracker()
 
         # Filter out records with zero successful_requests first
         original_count = len(data)
@@ -52,13 +63,21 @@ class CBFTransformer:
         filtered_count = len(filtered_data)
 
         for row in filtered_data.iter_rows(named=True):
+            if use_error_tracking:
+                self.error_tracker.increment_total()
+
             try:
-                cbf_record = self._create_cbf_record(row)
+                cbf_record = self._create_cbf_record(row, use_error_tracking=use_error_tracking)
                 # Only include the record if CZRN generation was successful
                 cbf_data.append(cbf_record)
-            except Exception:
+                if use_error_tracking:
+                    # Success is tracked within _create_cbf_record
+                    pass
+            except Exception as e:
                 # Skip records that fail CZRN generation
                 czrn_dropped_count += 1
+                if use_error_tracking:
+                    self.error_tracker.add_error('CBF_TRANSFORMATION_FAILED', str(e), row, 'CBF')
                 continue
 
         # Print summary of dropped records if any
@@ -76,11 +95,22 @@ class CBFTransformer:
 
         return pl.DataFrame(cbf_data)
 
-    def _create_cbf_record(self, row: dict[str, Any]) -> dict[str, Any]:
-        """Create a single CBF record from LiteLLM daily spend row."""
+    def _create_cbf_record(self, row: dict[str, Any], use_error_tracking: bool = False) -> dict[str, Any]:
+        """Create a single CBF record from LiteLLM daily spend row.
+
+        CZRN components are mapped to supported CBF fields where possible:
+        CZRN format: czrn:<provider>:<service-type>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
+
+        - CZRN provider → resource/tag:czrn_provider (resource tag) ["litellm"]
+        - CZRN service-type → resource/service (standard CBF field) [custom_llm_provider]
+        - CZRN region → resource/region (standard CBF field) ["cross-region"]
+        - CZRN owner-account-id → resource/account (standard CBF field) [key_alias or api_key]
+        - CZRN resource-type → resource/usage_family (standard CBF field) [extracted model name]
+        - CZRN cloud-local-id → resource/tag:model (resource tag) [model identifier]
+        """
 
         # Parse date (daily spend tables use date strings like '2025-04-19')
-        usage_date = self._parse_date(row.get('date'))
+        usage_date = parse_date(row.get('date'))
 
         # Calculate total tokens
         prompt_tokens = int(row.get('prompt_tokens', 0))
@@ -88,30 +118,49 @@ class CBFTransformer:
         total_tokens = prompt_tokens + completion_tokens
 
         # Create CloudZero Resource Name (CZRN) as resource_id
-        resource_id = self.czrn_generator.create_from_litellm_data(row)
+        error_tracker = self.error_tracker if use_error_tracking else None
+        resource_id = self.czrn_generator.create_from_litellm_data(row, error_tracker)
 
         # Build dimensions for CloudZero
         entity_id = str(row.get('entity_id', ''))
         model = str(row.get('model', ''))
-        api_key_hash = str(row.get('api_key', ''))[:8]  # First 8 chars for identification
+        api_key_full = str(row.get('api_key', ''))  # Full API key for identification
 
         dimensions = {
+            # Original fields
             'entity_type': str(row.get('entity_type', '')),  # 'user' or 'team'
             'entity_id': entity_id,
-            'model': model,
+            'model_original': model,  # Original model name (renamed to avoid conflict)
             'model_group': str(row.get('model_group', '')),
             'provider': str(row.get('custom_llm_provider', '')),
-            'api_key_prefix': api_key_hash,
+            'api_key': api_key_full,
             'api_requests': str(row.get('api_requests', 0)),
             'successful_requests': str(row.get('successful_requests', 0)),
             'failed_requests': str(row.get('failed_requests', 0)),
             'cache_creation_tokens': str(row.get('cache_creation_input_tokens', 0)),
             'cache_read_tokens': str(row.get('cache_read_input_tokens', 0)),
+            # Enriched API key information
+            'key_name': str(row.get('key_name', '')),
+            'key_alias': str(row.get('key_alias', '')),
+            # Enriched user information
+            'user_alias': str(row.get('user_alias', '')),
+            'user_email': str(row.get('user_email', '')),
+            # Enriched team information
+            'team_alias': str(row.get('team_alias', '')),
+            'team_id': str(row.get('team_id', '')),
+            # Enriched organization information
+            'organization_alias': str(row.get('organization_alias', '')),
+            'organization_id': str(row.get('organization_id', '')),
         }
 
         # Extract CZRN components to populate corresponding CBF columns
-        czrn_components = self.czrn_generator.extract_components(resource_id)
-        service_type, provider, region, owner_account_id, resource_type, cloud_local_id = czrn_components
+        try:
+            czrn_components = self.czrn_generator.extract_components(resource_id)
+            provider, service_type, region, owner_account_id, resource_type, cloud_local_id = czrn_components
+        except Exception as e:
+            if use_error_tracking:
+                self.error_tracker.add_error('CZRN_COMPONENT_EXTRACTION_FAILED', str(e), row, 'CBF')
+            raise
 
         # CloudZero CBF format with proper column names
         cbf_record = {
@@ -124,19 +173,19 @@ class CBFTransformer:
             'usage/amount': total_tokens,  # Numeric value of tokens consumed
             'usage/units': 'tokens',  # Description of token units
 
-            # CBF fields that correspond to CZRN components
-            'resource/service': service_type,  # Maps to CZRN service-type (litellm)
-            'resource/account': owner_account_id,  # Maps to CZRN owner-account-id (entity_id)
+            # Standard CBF fields for CZRN components
+            'resource/service': service_type,  # Maps to CZRN service-type (custom_llm_provider)
+            'resource/account': owner_account_id,  # Maps to CZRN owner-account-id (key_alias or api_key)
             'resource/region': region,  # Maps to CZRN region (cross-region)
-            'resource/usage_family': resource_type,  # Maps to CZRN resource-type (llm-usage)
+            'resource/usage_family': resource_type,  # Maps to CZRN resource-type (extracted model name)
 
             # Line item details
             'lineitem/type': 'Usage',  # Standard usage line item
         }
 
-        # Add CZRN components that don't have direct CBF column mappings as resource tags
-        cbf_record['resource/tag:provider'] = provider  # CZRN provider component
-        cbf_record['resource/tag:model'] = cloud_local_id  # CZRN cloud-local-id component (model)
+        # Add CZRN components that don't have standard CBF field mappings as resource tags
+        cbf_record['resource/tag:czrn_provider'] = provider  # CZRN provider component ("litellm")
+        cbf_record['resource/tag:model'] = cloud_local_id  # CZRN cloud-local-id component
 
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():
@@ -153,25 +202,5 @@ class CBFTransformer:
 
         return cbf_record
 
-    def _parse_date(self, date_str) -> datetime:
-        """Parse date string from daily spend tables (e.g., '2025-04-19')."""
-        if date_str is None:
-            return None
-
-        if isinstance(date_str, datetime):
-            return date_str
-
-        if isinstance(date_str, str):
-            try:
-                # Parse date string and set to midnight UTC for daily aggregation
-                return pl.Series([date_str]).str.to_datetime("%Y-%m-%d").item()
-            except Exception:
-                try:
-                    # Fallback: try ISO format parsing
-                    return pl.Series([date_str]).str.to_datetime().item()
-                except Exception:
-                    return None
-
-        return None
 
 

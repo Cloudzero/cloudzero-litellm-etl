@@ -37,79 +37,139 @@ class LiteLLMDatabase:
         return self._connection
 
     def get_usage_data(self, limit: int | None = None) -> pl.DataFrame:
-        """Retrieve consolidated usage data from LiteLLM daily spend tables."""
-        # Union query to combine user, team, and tag spend data
+        """Retrieve enriched usage data from LiteLLM DailyUserSpend table with API key and user lookup information."""
+        # Enhanced query with user lookup tables for API key enrichment
+        query = """
+        SELECT
+            s.id,
+            s.date,
+            s.user_id as entity_id,
+            'user' as entity_type,
+            s.api_key,
+            s.model,
+            s.model_group,
+            s.custom_llm_provider,
+            s.prompt_tokens,
+            s.completion_tokens,
+            s.spend,
+            s.api_requests,
+            s.successful_requests,
+            s.failed_requests,
+            s.cache_creation_input_tokens,
+            s.cache_read_input_tokens,
+            s.created_at,
+            s.updated_at,
+            -- Enriched API key information
+            vt.key_name,
+            vt.key_alias,
+            -- Enriched user information
+            u.user_alias,
+            u.user_email,
+            -- Enriched team information
+            t.team_alias,
+            t.team_id,
+            -- Enriched organization information
+            o.organization_alias,
+            o.organization_id
+        FROM "LiteLLM_DailyUserSpend" s
+        LEFT JOIN "LiteLLM_VerificationToken" vt ON s.api_key = vt.token
+        LEFT JOIN "LiteLLM_UserTable" u ON vt.user_id = u.user_id
+        LEFT JOIN "LiteLLM_TeamTable" t ON vt.team_id = t.team_id
+        LEFT JOIN "LiteLLM_OrganizationTable" o ON vt.organization_id = o.organization_id
+        ORDER BY s.date DESC, s.created_at DESC
+        """
+
+        if limit:
+            query += f" LIMIT {limit}"
+
+        conn = self.connect()
+        try:
+            return pl.read_database(query, conn)
+        finally:
+            conn.close()
+
+    def get_spend_analysis_data(self, limit: int | None = None) -> pl.DataFrame:
+        """Retrieve enriched consolidated usage data from both user and team spend tables with API key and user lookup information."""
+        # Enhanced union query with user lookup tables for API key enrichment
         query = """
         WITH consolidated_spend AS (
-            -- User spend data
+            -- User spend data with enrichment
             SELECT
-                id,
-                date,
-                user_id as entity_id,
+                s.id,
+                s.date,
+                s.user_id as entity_id,
                 'user' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyUserSpend"
+                s.api_key,
+                s.model,
+                s.model_group,
+                s.custom_llm_provider,
+                s.prompt_tokens,
+                s.completion_tokens,
+                s.spend,
+                s.api_requests,
+                s.successful_requests,
+                s.failed_requests,
+                s.cache_creation_input_tokens,
+                s.cache_read_input_tokens,
+                s.created_at,
+                s.updated_at,
+                -- Enriched API key information
+                vt.key_name,
+                vt.key_alias,
+                -- Enriched user information
+                u.user_alias,
+                u.user_email,
+                -- Enriched team information
+                t.team_alias,
+                t.team_id,
+                -- Enriched organization information
+                o.organization_alias,
+                o.organization_id
+            FROM "LiteLLM_DailyUserSpend" s
+            LEFT JOIN "LiteLLM_VerificationToken" vt ON s.api_key = vt.token
+            LEFT JOIN "LiteLLM_UserTable" u ON vt.user_id = u.user_id
+            LEFT JOIN "LiteLLM_TeamTable" t ON vt.team_id = t.team_id
+            LEFT JOIN "LiteLLM_OrganizationTable" o ON vt.organization_id = o.organization_id
 
             UNION ALL
 
-            -- Team spend data
+            -- Team spend data with enrichment
             SELECT
-                id,
-                date,
-                team_id as entity_id,
+                s.id,
+                s.date,
+                s.team_id as entity_id,
                 'team' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTeamSpend"
-
-            UNION ALL
-
-            -- Tag spend data
-            SELECT
-                id,
-                date,
-                tag as entity_id,
-                'tag' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTagSpend"
+                s.api_key,
+                s.model,
+                s.model_group,
+                s.custom_llm_provider,
+                s.prompt_tokens,
+                s.completion_tokens,
+                s.spend,
+                s.api_requests,
+                s.successful_requests,
+                s.failed_requests,
+                s.cache_creation_input_tokens,
+                s.cache_read_input_tokens,
+                s.created_at,
+                s.updated_at,
+                -- Enriched API key information
+                vt.key_name,
+                vt.key_alias,
+                -- Enriched user information (may be null for team records)
+                u.user_alias,
+                u.user_email,
+                -- Enriched team information
+                t.team_alias,
+                t.team_id,
+                -- Enriched organization information
+                o.organization_alias,
+                o.organization_id
+            FROM "LiteLLM_DailyTeamSpend" s
+            LEFT JOIN "LiteLLM_VerificationToken" vt ON s.api_key = vt.token
+            LEFT JOIN "LiteLLM_UserTable" u ON vt.user_id = u.user_id
+            LEFT JOIN "LiteLLM_TeamTable" t ON vt.team_id = t.team_id
+            LEFT JOIN "LiteLLM_OrganizationTable" o ON vt.organization_id = o.organization_id
         )
         SELECT * FROM consolidated_spend
         ORDER BY date DESC, created_at DESC
@@ -166,9 +226,9 @@ class LiteLLMDatabase:
         try:
             # Get all LiteLLM tables
             litellm_tables_query = """
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
             AND table_name LIKE 'LiteLLM_%'
             ORDER BY table_name;
             """
@@ -180,7 +240,7 @@ class LiteLLMDatabase:
             for table_name in table_names:
                 # Get column information
                 columns_query = """
-                SELECT 
+                SELECT
                     column_name,
                     data_type,
                     is_nullable,
@@ -189,7 +249,7 @@ class LiteLLMDatabase:
                     numeric_precision,
                     numeric_scale,
                     ordinal_position
-                FROM information_schema.columns 
+                FROM information_schema.columns
                 WHERE table_name = %s
                 AND table_schema = 'public'
                 ORDER BY ordinal_position;
@@ -261,6 +321,61 @@ class LiteLLMDatabase:
                 'table_count': len(table_names),
                 'table_names': table_names
             }
+        finally:
+            conn.close()
+
+    def get_individual_table_data(self, table_type: str, limit: int | None = None, force_refresh: bool = False) -> pl.DataFrame:
+        """Get data from a specific table type (user/team/tag) directly from database."""
+        # Map table type to actual table name
+        table_mapping = {
+            'user': 'LiteLLM_DailyUserSpend',
+            'team': 'LiteLLM_DailyTeamSpend',
+            'tag': 'LiteLLM_DailyTagSpend'
+        }
+
+        if table_type not in table_mapping:
+            raise ValueError(f"Invalid table type: {table_type}. Must be one of: {', '.join(table_mapping.keys())}")
+
+        table_name = table_mapping[table_type]
+
+        # Build query based on table type
+        if table_type == 'user':
+            entity_field = 'user_id'
+        elif table_type == 'team':
+            entity_field = 'team_id'
+        else:  # tag
+            entity_field = 'tag'
+
+        query = f"""
+        SELECT
+            id,
+            date,
+            {entity_field} as entity_id,
+            '{table_type}' as entity_type,
+            api_key,
+            model,
+            model_group,
+            custom_llm_provider,
+            prompt_tokens,
+            completion_tokens,
+            spend,
+            api_requests,
+            successful_requests,
+            failed_requests,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            created_at,
+            updated_at
+        FROM "{table_name}"
+        ORDER BY date DESC, created_at DESC
+        """
+
+        if limit:
+            query += f" LIMIT {limit}"
+
+        conn = self.connect()
+        try:
+            return pl.read_database(query, conn)
         finally:
             conn.close()
 

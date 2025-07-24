@@ -56,6 +56,17 @@ class CachedLiteLLMDatabase:
             force_refresh=force_refresh
         )
 
+    def get_spend_analysis_data(self, limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
+        """Get spend analysis data from database directly (bypasses cache for fresh data)."""
+        if not self.connection_string:
+            raise ValueError("No database connection string provided")
+
+        # For spend analysis, get fresh data directly from database to include both user and team data
+        if not self.database:
+            self.database = LiteLLMDatabase(self.connection_string)
+
+        return self.database.get_spend_analysis_data(limit=limit)
+
     def get_table_info(self) -> dict[str, Any]:
         """Get table information from cache."""
         # Force a cache refresh if empty, then get fresh cache info
@@ -105,12 +116,20 @@ class CachedLiteLLMDatabase:
             'tag_spend': breakdown.get('tag', 0)
         }
 
-        # Get columns from cache metadata or use default known columns
+        # Get columns from cache metadata or use default known columns (including enriched fields)
         columns = [
             'id', 'date', 'entity_id', 'entity_type', 'api_key', 'model', 'model_group',
             'custom_llm_provider', 'prompt_tokens', 'completion_tokens', 'spend',
             'api_requests', 'successful_requests', 'failed_requests',
-            'cache_creation_input_tokens', 'cache_read_input_tokens', 'created_at', 'updated_at'
+            'cache_creation_input_tokens', 'cache_read_input_tokens', 'created_at', 'updated_at',
+            # Enriched API key information
+            'key_name', 'key_alias',
+            # Enriched user information
+            'user_alias', 'user_email',
+            # Enriched team information
+            'team_alias', 'team_id',
+            # Enriched organization information
+            'organization_alias', 'organization_id'
         ]
 
         return {

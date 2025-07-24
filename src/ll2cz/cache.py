@@ -236,28 +236,19 @@ class DataCache:
         try:
             conn.execute("DELETE FROM consolidated_spend")
 
-            # Insert new data
+            # Insert new data with dynamic column handling
             records = data.to_dicts()
-            for record in records:
-                conn.execute("""
-                    INSERT INTO consolidated_spend (
-                        id, date, entity_id, entity_type, api_key, model, model_group,
-                        custom_llm_provider, prompt_tokens, completion_tokens, spend,
-                        api_requests, successful_requests, failed_requests,
-                        cache_creation_input_tokens, cache_read_input_tokens,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    record.get('id'), record.get('date'), record.get('entity_id'),
-                    record.get('entity_type'), record.get('api_key'), record.get('model'),
-                    record.get('model_group'), record.get('custom_llm_provider'),
-                    record.get('prompt_tokens', 0), record.get('completion_tokens', 0),
-                    record.get('spend', 0.0), record.get('api_requests', 0),
-                    record.get('successful_requests', 0), record.get('failed_requests', 0),
-                    record.get('cache_creation_input_tokens', 0),
-                    record.get('cache_read_input_tokens', 0),
-                    record.get('created_at'), record.get('updated_at')
-                ))
+            if records:
+                # Get column names from actual data
+                columns = list(records[0].keys())
+                placeholders = ', '.join(['?' for _ in columns])
+                column_names = ', '.join(columns)
+                
+                insert_sql = f"INSERT INTO consolidated_spend ({column_names}) VALUES ({placeholders})"
+                
+                for record in records:
+                    values = [record.get(col) for col in columns]
+                    conn.execute(insert_sql, values)
 
             conn.commit()
 
@@ -275,6 +266,96 @@ class DataCache:
         finally:
             conn.close()
 
+    def _check_schema_mismatch(self, database: LiteLLMDatabase, connection_string: str) -> bool:
+        """Check if the database schema has changed compared to cached schema."""
+        try:
+            # Get current database columns from fresh data sample
+            fresh_data = database.get_usage_data()
+            if fresh_data.is_empty():
+                return False
+            
+            database_columns = set(fresh_data.columns)
+            
+            # Get cached table columns
+            conn = sqlite3.connect(self.cache_file)
+            try:
+                cursor = conn.execute("PRAGMA table_info(consolidated_spend)")
+                cache_columns = {row[1] for row in cursor.fetchall()}
+            finally:
+                conn.close()
+            
+            # Check if database has columns that cache doesn't have
+            missing_columns = database_columns - cache_columns
+            if missing_columns:
+                self.console.print(f"[dim]Cache missing columns: {', '.join(sorted(missing_columns))}[/dim]")
+                return True
+                
+            return False
+            
+        except Exception:
+            # If we can't check schema, assume no mismatch
+            return False
+
+    def _recreate_cache_schema(self, database: LiteLLMDatabase) -> None:
+        """Recreate cache table schema to match current database schema."""
+        try:
+            # Get fresh data to determine all columns and their types
+            fresh_data = database.get_usage_data()
+            if fresh_data.is_empty():
+                return
+            
+            conn = sqlite3.connect(self.cache_file)
+            try:
+                # Drop existing table
+                conn.execute("DROP TABLE IF EXISTS consolidated_spend")
+                
+                # Create new table with dynamic schema based on actual data
+                # Use polars schema info to determine SQLite column types
+                column_definitions = []
+                
+                for col_name, polars_dtype in fresh_data.schema.items():
+                    # Map polars types to SQLite types
+                    if polars_dtype in [pl.Int32, pl.Int64]:
+                        sql_type = "INTEGER"
+                    elif polars_dtype in [pl.Float32, pl.Float64]:
+                        sql_type = "REAL"
+                    elif polars_dtype == pl.Boolean:
+                        sql_type = "INTEGER"  # SQLite stores booleans as integers
+                    else:
+                        sql_type = "TEXT"
+                    
+                    # Handle special columns
+                    if col_name in ['id', 'entity_type']:
+                        column_definitions.append(f"{col_name} {sql_type} NOT NULL")
+                    else:
+                        column_definitions.append(f"{col_name} {sql_type}")
+                
+                # Create table with dynamic schema
+                create_sql = f"""
+                    CREATE TABLE consolidated_spend (
+                        {', '.join(column_definitions)},
+                        PRIMARY KEY (id, entity_type)
+                    )
+                """
+                conn.execute(create_sql)
+                
+                # Recreate indexes for performance
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_type ON consolidated_spend(entity_type)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON consolidated_spend(date)")
+                if 'model' in fresh_data.columns:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_model ON consolidated_spend(model)")
+                if 'custom_llm_provider' in fresh_data.columns:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON consolidated_spend(custom_llm_provider)")
+                
+                conn.commit()
+                self.console.print("[blue]Cache schema updated to match database[/blue]")
+                
+            finally:
+                conn.close()
+                
+        except Exception as e:
+            self.console.print(f"[red]Failed to recreate cache schema: {e}[/red]")
+
     def get_cached_data(self, database: Optional[LiteLLMDatabase], connection_string: str,
                        limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
         """Get data from cache, refreshing if necessary."""
@@ -287,11 +368,19 @@ class DataCache:
 
         # Check if we should use server or cache
         if database is not None:
+            # Check for schema mismatch and force refresh if needed
+            schema_mismatch = self._check_schema_mismatch(database, connection_string)
+            if schema_mismatch:
+                self.console.print("[blue]Schema change detected - forcing cache refresh...[/blue]")
+                force_refresh = True
+
             server_stats = self._check_server_freshness(database)
             server_available = server_stats.get('server_available', True)
 
             if server_available:
                 if force_refresh or not self._is_cache_fresh(connection_string, server_stats):
+                    if schema_mismatch:
+                        self._recreate_cache_schema(database)
                     self._update_cache(database, connection_string)
                 else:
                     self.console.print("[dim]Using cached data (fresh)[/dim]")
