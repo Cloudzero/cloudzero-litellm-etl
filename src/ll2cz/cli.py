@@ -1,27 +1,9 @@
-# Copyright 2025 CloudZero
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# CHANGELOG: 2025-01-19 - Added configuration file support and --version option (erik.peterson)
-# CHANGELOG: 2025-01-19 - Migrated from click to typer for better CLI experience (erik.peterson)
-# CHANGELOG: 2025-01-19 - Added pathlib for file operations (erik.peterson)
-# CHANGELOG: 2025-01-19 - Migrated from pandas to polars (erik.peterson)
-# CHANGELOG: 2025-01-19 - Initial CLI implementation with click (erik.peterson)
+# SPDX-FileCopyrightText: Copyright (c), CloudZero, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 """Command line interface for LiteLLM to CloudZero ETL tool."""
 
 import json
-import zoneinfo
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Optional
@@ -30,11 +12,15 @@ import polars as pl
 import typer
 from rich.console import Console
 
+from . import __version__
 from .analysis import DataAnalyzer
 from .cached_database import CachedLiteLLMDatabase
 from .config import Config
 from .data_processor import DataProcessor
+from .data_source_strategy import DataSourceFactory
 from .database import LiteLLMDatabase
+from .date_utils import DateParser
+from .decorators import handle_errors, requires_cloudzero_auth, requires_database
 from .output import CloudZeroStreamer, CSVWriter
 from .transform import CBFTransformer
 
@@ -49,7 +35,7 @@ console = Console()
 def version_callback(value: bool):
     """Show version information."""
     if value:
-        console.print("ll2cz version 0.4.0")
+        console.print(f"ll2cz version {__version__}")
         raise typer.Exit()
 
 
@@ -83,6 +69,8 @@ app.add_typer(config_app, name="config")
 
 
 @app.command()
+@handle_errors
+@requires_database
 def transform(
     db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
     output_file: Annotated[Optional[str], typer.Option("--output", help="Output CSV file name")] = None,
@@ -91,50 +79,38 @@ def transform(
 ) -> None:
     """Transform LiteLLM database data into CloudZero AnyCost CBF format."""
 
-    # Load configuration and merge with CLI arguments (CLI takes priority)
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
+    database = LiteLLMDatabase(db_connection)
 
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
+    console.print("[blue]Loading data from LiteLLM database...[/blue]")
+    # Limit data if screen output is requested
+    data_limit = limit if screen else None
+    data = database.get_usage_data(limit=data_limit)
 
-    try:
-        database = LiteLLMDatabase(db_connection)
+    if data.is_empty():
+        console.print("[yellow]No data found in database[/yellow]")
+        return
 
-        console.print("[blue]Loading data from LiteLLM database...[/blue]")
-        # Limit data if screen output is requested
-        data_limit = limit if screen else None
-        data = database.get_usage_data(limit=data_limit)
+    console.print(f"[blue]Processing {len(data)} records...[/blue]")
+    transformer = CBFTransformer()
+    cbf_data = transformer.transform(data)
 
-        if data.is_empty():
-            console.print("[yellow]No data found in database[/yellow]")
-            return
+    if screen:
+        _display_cbf_data_on_screen(cbf_data)
 
-        console.print(f"[blue]Processing {len(data)} records...[/blue]")
-        transformer = CBFTransformer()
-        cbf_data = transformer.transform(data)
+    elif output_file:
+        writer = CSVWriter(output_file)
+        writer.write(cbf_data)
+        console.print(f"[green]Data written to {output_file}[/green]")
 
-        if screen:
-            _display_cbf_data_on_screen(cbf_data)
-
-        elif output_file:
-            writer = CSVWriter(output_file)
-            writer.write(cbf_data)
-            console.print(f"[green]Data written to {output_file}[/green]")
-
-        else:
-            console.print("[red]Error: Must specify either --screen or --output[/red]")
-            raise typer.Exit(1)
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+    else:
+        console.print("[red]Error: Must specify either --screen or --output[/red]")
         raise typer.Exit(1)
 
 
 @app.command()
+@handle_errors
+@requires_database
+@requires_cloudzero_auth
 def transmit(
     mode: Annotated[str, typer.Argument(help="Transmission mode: 'day' for single day, 'month' for month, or 'all' for all data")],
     date_spec: Annotated[Optional[str], typer.Argument(help="Date specification: DD-MM-YYYY for day mode, MM-YYYY for month mode, ignored for all mode")] = None,
@@ -172,37 +148,23 @@ def transmit(
         console.print("[red]Error: --source must be 'usertable' or 'logs'[/red]")
         raise typer.Exit(1)
 
-    # Load configuration and merge with CLI arguments (CLI takes priority)
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-    cz_api_key = config.get_cz_api_key(cz_api_key)
-    cz_connection_id = config.get_cz_connection_id(cz_connection_id)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
-    if not cz_api_key or not cz_connection_id:
-        console.print("[red]Error: --cz-api-key and --cz-connection-id are required[/red]")
-        console.print("[blue]You can set them via CLI arguments or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
     # Set up timezone
     user_timezone = timezone or 'UTC'
 
+    # Parse date specification and determine date range
     try:
-        # Parse date specification and determine date range
-        date_filter = _parse_date_specification(mode, date_spec, user_timezone)
+        date_parser = DateParser(user_timezone)
+        date_filter = date_parser.parse_date_spec(mode, date_spec)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
 
-        # Choose database implementation based on cache setting
-        if disable_cache:
-            database = LiteLLMDatabase(db_connection)
-            console.print("[dim]Cache disabled - using direct database connection[/dim]")
-        else:
-            database = CachedLiteLLMDatabase(db_connection)
+    # Choose database implementation based on cache setting
+    if disable_cache:
+        database = LiteLLMDatabase(db_connection)
+        console.print("[dim]Cache disabled - using direct database connection[/dim]")
+    else:
+        database = CachedLiteLLMDatabase(db_connection)
 
         # Display source information
         source_desc = "SpendLogs table" if source == "logs" else "user tables"
@@ -210,14 +172,14 @@ def transmit(
         if date_filter:
             console.print(f"[dim]Date filter: {date_filter.get('description', 'Unknown filter')}[/dim]")
 
-        # Load data with appropriate filtering based on source
+        # Use strategy pattern to load data
+        strategy = DataSourceFactory.create_strategy(source)
+
         if test:
-            if source == "logs":
-                data = database.get_spend_logs_for_analysis(limit=5)
-            else:
-                data = database.get_usage_data(limit=5)
+            # In test mode, always load just 5 records
+            data = strategy.get_data(database, date_filter=None, limit=5)
         else:
-            data = _load_filtered_data(database, date_filter, limit, source)
+            data = strategy.get_data(database, date_filter, limit)
 
         if data.is_empty():
             console.print("[yellow]No data found for the specified criteria[/yellow]")
@@ -241,15 +203,13 @@ def transmit(
             streamer.send_batched(cbf_data, operation=operation)
             console.print(f"[green]✓ Successfully transmitted {len(cbf_data)} records to CloudZero AnyCost API[/green]")
 
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
 
 analyze_app = typer.Typer(help="Analysis and data exploration commands")
 
 
 @analyze_app.command("data")
+@handle_errors
+@requires_database
 def analyze_data(
     db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Number of records to analyze")] = 10000,
@@ -264,16 +224,6 @@ def analyze_data(
 ) -> None:
     """Comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation."""
 
-    # Load configuration
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
     if show_raw and table not in ["all", "user", "team", "tag"]:
         console.print("[red]Error: --table must be one of: all, user, team, tag[/red]")
         raise typer.Exit(1)
@@ -286,49 +236,44 @@ def analyze_data(
         console.print("[red]Error: --source must be either 'usertable' or 'logs'[/red]")
         raise typer.Exit(1)
 
-    try:
-        # Choose database implementation based on cache setting
-        if disable_cache:
-            database = LiteLLMDatabase(db_connection)
-            console.print("[dim]Cache disabled - using direct database connection[/dim]")
-        else:
-            database = CachedLiteLLMDatabase(db_connection)
-            if database.is_offline_mode():
-                console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
+    # Choose database implementation based on cache setting
+    if disable_cache:
+        database = LiteLLMDatabase(db_connection)
+        console.print("[dim]Cache disabled - using direct database connection[/dim]")
+    else:
+        database = CachedLiteLLMDatabase(db_connection)
+        if database.is_offline_mode():
+            console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
 
-        if show_raw:
-            # Show raw data tables (former show-data functionality)
-            if table == "all":
-                if csv_output:
-                    console.print(f"[blue]Exporting {limit:,} records from each LiteLLM table to CSV files...[/blue]")
-                else:
-                    console.print(f"[blue]Showing {limit:,} records from each LiteLLM table...[/blue]")
-                _show_all_tables_data_cached(database, limit, force_refresh, csv_output)
+    if show_raw:
+        # Show raw data tables (former show-data functionality)
+        if table == "all":
+            if csv_output:
+                console.print(f"[blue]Exporting {limit:,} records from each LiteLLM table to CSV files...[/blue]")
             else:
-                if csv_output:
-                    console.print(f"[blue]Exporting {limit:,} records from LiteLLM_{table.title()}Spend table to CSV file...[/blue]")
-                else:
-                    console.print(f"[blue]Showing {limit:,} records from LiteLLM_{table.title()}Spend table...[/blue]")
-                _show_single_table_data_cached(database, table, limit, force_refresh, csv_output)
+                console.print(f"[blue]Showing {limit:,} records from each LiteLLM table...[/blue]")
+            _show_all_tables_data_cached(database, limit, force_refresh, csv_output)
         else:
-            # Show comprehensive data analysis including CZRN generation
-            source_desc = "SpendLogs table" if source == "logs" else "user tables"
-            console.print(f"[blue]Running comprehensive analysis on {limit:,} records from {source_desc}...[/blue]")
-            analyzer = DataAnalyzer(database)
-            results = analyzer.analyze(limit=limit, force_refresh=force_refresh, show_czrn_analysis=not disable_czrn, source=source)
+            if csv_output:
+                console.print(f"[blue]Exporting {limit:,} records from LiteLLM_{table.title()}Spend table to CSV file...[/blue]")
+            else:
+                console.print(f"[blue]Showing {limit:,} records from LiteLLM_{table.title()}Spend table...[/blue]")
+            _show_single_table_data_cached(database, table, limit, force_refresh, csv_output)
+    else:
+        # Show comprehensive data analysis including CZRN generation
+        source_desc = "SpendLogs table" if source == "logs" else "user tables"
+        console.print(f"[blue]Running comprehensive analysis on {limit:,} records from {source_desc}...[/blue]")
+        analyzer = DataAnalyzer(database)
+        results = analyzer.analyze(limit=limit, force_refresh=force_refresh, show_czrn_analysis=not disable_czrn, source=source)
 
-            console.print("\n[bold]Comprehensive Data Analysis:[/bold]")
-            console.print("=" * 60)
-            analyzer.print_results(results, source)
+        console.print("\n[bold]Comprehensive Data Analysis:[/bold]")
+        console.print("=" * 60)
+        analyzer.print_results(results, source)
 
-            if json_output:
-                json_path = Path(json_output)
-                json_path.write_text(json.dumps(results, indent=2, default=str))
-                console.print(f"[green]Analysis results saved to {json_path}[/green]")
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        if json_output:
+            json_path = Path(json_output)
+            json_path.write_text(json.dumps(results, indent=2, default=str))
+            console.print(f"[green]Analysis results saved to {json_path}[/green]")
 
 
 
@@ -903,113 +848,8 @@ def _create_complete_documentation(schema_info: dict) -> str:
     return '\n'.join(doc)
 
 
-def _parse_date_specification(mode: str, date_spec: Optional[str], user_timezone: str) -> Optional[dict]:
-    """Parse date specification and return filter criteria."""
-    from datetime import datetime
-    from datetime import timezone as tz
-
-    try:
-        # Set up timezone
-        if user_timezone == 'UTC':
-            tz_info = tz.utc
-        else:
-            try:
-                tz_info = zoneinfo.ZoneInfo(user_timezone)
-            except zoneinfo.ZoneInfoNotFoundError:
-                console.print(f"[yellow]Warning: Unknown timezone '{user_timezone}', using UTC[/yellow]")
-                tz_info = tz.utc
-
-        now = datetime.now(tz_info)
-
-        if mode == 'day':
-            if date_spec:
-                # Parse DD-MM-YYYY format
-                try:
-                    day_obj = datetime.strptime(date_spec, '%d-%m-%Y').replace(tzinfo=tz_info)
-                    start_date = day_obj.strftime('%Y-%m-%d')
-                    end_date = start_date  # Same day
-                except ValueError:
-                    console.print(f"[red]Error: Invalid date format '{date_spec}'. Use DD-MM-YYYY (e.g., 15-01-2024)[/red]")
-                    raise typer.Exit(1)
-            else:
-                # Use current day
-                start_date = now.strftime('%Y-%m-%d')
-                end_date = start_date
-
-            return {'start_date': start_date, 'end_date': end_date, 'description': f"Day: {start_date}"}
-
-        elif mode == 'month':
-            if date_spec:
-                # Parse MM-YYYY format
-                try:
-                    month_obj = datetime.strptime(date_spec, '%m-%Y').replace(tzinfo=tz_info)
-                    # Get first and last day of the month
-                    start_date = month_obj.strftime('%Y-%m-01')
-                    if month_obj.month == 12:
-                        last_day = 31
-                    else:
-                        # Get last day of month
-                        import datetime as dt
-                        next_month = month_obj.replace(month=month_obj.month + 1, day=1)
-                        last_day = (next_month - dt.timedelta(days=1)).day
-                    end_date = month_obj.strftime(f'%Y-%m-{last_day:02d}')
-                except ValueError:
-                    console.print(f"[red]Error: Invalid month format '{date_spec}'. Use MM-YYYY (e.g., 01-2024)[/red]")
-                    raise typer.Exit(1)
-            else:
-                # Use current month
-                start_date = now.strftime('%Y-%m-01')
-                # Get last day of current month
-                if now.month == 12:
-                    last_day = 31
-                else:
-                    import datetime as dt
-                    next_month = now.replace(month=now.month + 1, day=1)
-                    last_day = (next_month - dt.timedelta(days=1)).day
-                end_date = now.strftime(f'%Y-%m-{last_day:02d}')
-
-            return {'start_date': start_date, 'end_date': end_date, 'description': f"Month: {start_date} to {end_date}"}
-
-        elif mode == 'all':
-            # No date filtering for 'all' mode
-            return {'description': "All available data"}
-
-    except Exception as e:
-        console.print(f"[red]Error parsing date specification: {e}[/red]")
-        raise typer.Exit(1)
-
-
-def _load_filtered_data(database, date_filter: Optional[dict], limit: Optional[int], source: str = "usertable"):
-    """Load data with optional date filtering."""
-    import polars as pl
-
-    # For now, load all data and filter in memory
-    # In a production system, you'd want to filter at the database level
-    if source == "logs":
-        data = database.get_spend_logs_for_analysis(limit=limit)
-    else:
-        data = database.get_usage_data(limit=limit)
-
-    if not date_filter or 'start_date' not in date_filter:
-        return data
-
-    # Filter data by date range if specified
-    # Use different date columns based on source
-    date_column = 'start_time' if source == "logs" and 'start_time' in data.columns else 'date'
-
-    if date_column in data.columns:
-        start_date = date_filter['start_date']
-        end_date = date_filter['end_date']
-
-        # Convert to date strings for comparison
-        filtered_data = data.filter(
-            (pl.col(date_column) >= start_date) & (pl.col(date_column) <= end_date)
-        )
-
-        console.print(f"[dim]Filtered from {len(data)} to {len(filtered_data)} records for date range[/dim]")
-        return filtered_data
-
-    return data
+# Note: _parse_date_specification and _load_filtered_data functions have been replaced
+# by DateParser class and DataSourceStrategy pattern for better code organization
 
 
 def _display_enhanced_test_payloads(cbf_data: pl.DataFrame, operation: str, mode: str) -> None:

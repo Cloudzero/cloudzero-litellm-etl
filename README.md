@@ -1,4 +1,4 @@
-# LiteLLM to CloudZero ETL Tool
+# ll2cz - LiteLLM to CloudZero ETL Tool
 
 Transform LiteLLM database data into CloudZero AnyCost CBF format for cost tracking and analysis.
 
@@ -6,6 +6,8 @@ Transform LiteLLM database data into CloudZero AnyCost CBF format for cost track
 
 - Extract usage data from LiteLLM PostgreSQL database
 - Transform data into CloudZero Billing Format (CBF)
+- **Cost comparison analysis** between SpendLogs and user tables (v0.4.0+)
+- **Dual data source support** with `--source` option: transaction-level SpendLogs or daily aggregated user tables
 - Analysis mode with beautiful terminal output using Rich
 - Multiple output options: CSV files or direct CloudZero API streaming
 - Built with modern Python tools: uv, ruff, pytest, polars, httpx
@@ -16,17 +18,17 @@ Transform LiteLLM database data into CloudZero AnyCost CBF format for cost track
 
 ```bash
 # Install with uv (recommended)
-uv add litellm-cz-etl
+uv add ll2cz
 
 # Or install with pip
-pip install litellm-cz-etl
+pip install ll2cz
 ```
 
 ### From Source
 
 ```bash
-git clone <repository-url>
-cd litellm-cz-etl
+git clone https://github.com/Cloudzero/cloudzero-litellm-etl.git
+cd cloudzero-litellm-etl
 uv sync
 ```
 
