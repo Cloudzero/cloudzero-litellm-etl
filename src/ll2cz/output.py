@@ -20,6 +20,7 @@
 
 import zoneinfo
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
@@ -228,11 +229,11 @@ class CloudZeroStreamer:
             for key, value in row.items():
                 if value is not None:
                     # CloudZero requires numeric values to be strings, but NOT in scientific notation
-                    if isinstance(value, (int, float)):
-                        # Format floats to avoid scientific notation
-                        if isinstance(value, float):
+                    if isinstance(value, (int, float, Decimal)):
+                        # Format floats and decimals to avoid scientific notation
+                        if isinstance(value, (float, Decimal)):
                             # Use a reasonable precision that avoids scientific notation
-                            api_record[key] = f"{value:.10f}".rstrip('0').rstrip('.')
+                            api_record[key] = f"{float(value):.10f}".rstrip('0').rstrip('.')
                         else:
                             api_record[key] = str(value)
                     else:

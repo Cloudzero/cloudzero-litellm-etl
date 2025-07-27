@@ -46,8 +46,8 @@ class CZRNGenerator:
         """
         return extract_model_name(model)
 
-    def create_from_litellm_data(self, row: dict[str, Any], error_tracker=None) -> str:
-        """Create a CZRN from LiteLLM daily spend data.
+    def create_from_litellm_data(self, row: dict[str, Any], error_tracker=None, source: str = "usertable") -> str:
+        """Create a CZRN from LiteLLM data (either user/team/tag tables or SpendLogs).
 
         CZRN format: czrn:<provider>:<service-type>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
 
@@ -56,12 +56,13 @@ class CZRNGenerator:
         - service-type: The custom_llm_provider (e.g., 'openai', 'anthropic', 'azure')
         - region: 'cross-region' (LiteLLM operates across regions)
         - owner-account-id: The key_alias (if available) or api_key as fallback
-        - resource-type: Extracted model name (e.g., 'claude-haiku', 'gpt', 'gemini')
+        - resource-type: Extracted model name (usertable) or call_type (logs)
         - cloud-local-id: Full model identifier with optional provider prefix
 
         Args:
             row: LiteLLM data row
             error_tracker: Optional error tracker for consolidated error reporting
+            source: Data source - 'usertable' for aggregated tables, 'logs' for SpendLogs
         """
         try:
             provider = 'litellm'
@@ -78,31 +79,58 @@ class CZRNGenerator:
             else:
                 owner_account_id = self._normalize_component(api_key)
 
-            # Get the model for processing
-            model = row.get('model', '').strip() if row.get('model') else ''
+            # Handle resource type and cloud_local_id based on source
+            if source == "logs":
+                # For SpendLogs, use call_type as resource type directly
+                call_type = row.get('call_type', '').strip() if row.get('call_type') else ''
+                if not call_type:
+                    error_msg = "Cannot generate CZRN: call_type field is empty or null"
+                    if error_tracker:
+                        error_tracker.add_error('MISSING_CALL_TYPE', error_msg, row, 'CZRN', 'call_type')
+                    raise ValueError(error_msg)
 
-            # Validate model field is not empty, null, or asterisk
-            if not model or model == '*':
-                error_msg = "Cannot generate CZRN: model field is empty, null, or '*'"
-                if error_tracker:
-                    error_tracker.add_error('MISSING_MODEL', error_msg, row, 'CZRN', 'model')
-                raise ValueError(error_msg)
+                resource_type = self._normalize_component(call_type)
 
-            # Set cloud_local_id to custom_llm_provider/model if custom_llm_provider not in model
-            if custom_llm_provider not in model:
-                cloud_local_id = f"{custom_llm_provider}/{model}"
+                # For SpendLogs, still use model for cloud_local_id but it's optional
+                model = row.get('model', '').strip() if row.get('model') else ''
+                if model:
+                    if custom_llm_provider not in model:
+                        cloud_local_id = f"{custom_llm_provider}/{model}"
+                    else:
+                        cloud_local_id = model
+                else:
+                    # If no model, use provider/call_type
+                    cloud_local_id = f"{custom_llm_provider}/{call_type}"
             else:
-                cloud_local_id = model
+                # For user tables, use model for both resource type and cloud_local_id
+                model = row.get('model', '').strip() if row.get('model') else ''
+
+                # Validate model field is not empty, null, or asterisk
+                if not model or model == '*':
+                    error_msg = "Cannot generate CZRN: model field is empty, null, or '*'"
+                    if error_tracker:
+                        error_tracker.add_error('MISSING_MODEL', error_msg, row, 'CZRN', 'model')
+                    raise ValueError(error_msg)
+
+                # Extract the core model name to use as the resource-type field
+                resource_type = self.extract_model_name(model)
+
+                # Set cloud_local_id to custom_llm_provider/model if custom_llm_provider not in model
+                if custom_llm_provider not in model:
+                    cloud_local_id = f"{custom_llm_provider}/{model}"
+                else:
+                    cloud_local_id = model
+
+            # Replace colons with pipes in cloud_local_id for compatibility
+            cloud_local_id = cloud_local_id.replace(':', '|')
 
             # Validate cloud_local_id is not invalid
             if not cloud_local_id or cloud_local_id.strip() == '' or cloud_local_id == '*':
                 error_msg = f"Cannot generate CZRN: cloud_local_id is invalid (empty, null, or '*'): {cloud_local_id}"
                 if error_tracker:
-                    error_tracker.add_error('INVALID_CLOUD_LOCAL_ID', error_msg, row, 'CZRN', 'model')
+                    field_name = 'call_type' if source == "logs" else 'model'
+                    error_tracker.add_error('INVALID_CLOUD_LOCAL_ID', error_msg, row, 'CZRN', field_name)
                 raise ValueError(error_msg)
-
-            # Extract the core model name to use as the resource-type field
-            resource_type = self.extract_model_name(model)
 
             czrn = self.create_from_components(
                 provider=provider,

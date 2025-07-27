@@ -33,6 +33,7 @@ from rich.console import Console
 from .analysis import DataAnalyzer
 from .cached_database import CachedLiteLLMDatabase
 from .config import Config
+from .data_processor import DataProcessor
 from .database import LiteLLMDatabase
 from .output import CloudZeroStreamer, CSVWriter
 from .transform import CBFTransformer
@@ -48,7 +49,7 @@ console = Console()
 def version_callback(value: bool):
     """Show version information."""
     if value:
-        console.print("ll2cz version 0.1.0")
+        console.print("ll2cz version 0.4.0")
         raise typer.Exit()
 
 
@@ -145,6 +146,7 @@ def transmit(
     test: Annotated[bool, typer.Option("--test", help="Test mode: process only 5 records and show JSON payloads instead of transmitting (API keys still required)")] = False,
     limit: Annotated[Optional[int], typer.Option("--limit", help="Limit number of records to process (default: all records)")] = None,
     disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
+    source: Annotated[str, typer.Option("--source", help="Data source: 'usertable' (default) or 'logs' (SpendLogs table)")] = "usertable",
 ) -> None:
     """Transform LiteLLM data and transmit to CloudZero AnyCost API.
 
@@ -161,9 +163,13 @@ def transmit(
       ll2cz transmit all                    # Send all data in daily batches
     """
 
-    # Validate mode parameter
+    # Validate parameters
     if mode not in ['day', 'month', 'all']:
         console.print("[red]Error: Mode must be 'day', 'month', or 'all'[/red]")
+        raise typer.Exit(1)
+
+    if source not in ['usertable', 'logs']:
+        console.print("[red]Error: --source must be 'usertable' or 'logs'[/red]")
         raise typer.Exit(1)
 
     # Load configuration and merge with CLI arguments (CLI takes priority)
@@ -198,23 +204,31 @@ def transmit(
         else:
             database = CachedLiteLLMDatabase(db_connection)
 
-        console.print(f"[blue]Loading {mode} data from LiteLLM database...[/blue]")
+        # Display source information
+        source_desc = "SpendLogs table" if source == "logs" else "user tables"
+        console.print(f"[blue]Loading {mode} data from LiteLLM {source_desc}...[/blue]")
         if date_filter:
             console.print(f"[dim]Date filter: {date_filter.get('description', 'Unknown filter')}[/dim]")
 
-        # Load data with appropriate filtering
+        # Load data with appropriate filtering based on source
         if test:
-            data = database.get_usage_data(limit=5)
+            if source == "logs":
+                data = database.get_spend_logs_for_analysis(limit=5)
+            else:
+                data = database.get_usage_data(limit=5)
         else:
-            data = _load_filtered_data(database, date_filter, limit)
+            data = _load_filtered_data(database, date_filter, limit, source)
 
         if data.is_empty():
             console.print("[yellow]No data found for the specified criteria[/yellow]")
             return
 
         console.print(f"[blue]Processing {len(data)} records...[/blue]")
-        transformer = CBFTransformer()
-        cbf_data = transformer.transform(data)
+        processor = DataProcessor(source=source)
+        _, cbf_records, error_summary = processor.process_dataframe(data)
+
+        # Convert to DataFrame for compatibility with existing transmission logic
+        cbf_data = pl.DataFrame(cbf_records)
 
         # Determine operation mode
         operation = "sum" if append else "replace_hourly"
@@ -246,6 +260,7 @@ def analyze_data(
     csv_output: Annotated[bool, typer.Option("--csv", help="Export raw table data to CSV files (requires --show-raw)")] = False,
     disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
     disable_czrn: Annotated[bool, typer.Option("--disable-czrn", help="Disable CZRN generation analysis")] = False,
+    source: Annotated[str, typer.Option("--source", help="Data source: 'usertable' (default) or 'logs' (SpendLogs table)")] = "usertable",
 ) -> None:
     """Comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation."""
 
@@ -265,6 +280,10 @@ def analyze_data(
 
     if csv_output and not show_raw:
         console.print("[red]Error: --csv requires --show-raw to be enabled[/red]")
+        raise typer.Exit(1)
+
+    if source not in ["usertable", "logs"]:
+        console.print("[red]Error: --source must be either 'usertable' or 'logs'[/red]")
         raise typer.Exit(1)
 
     try:
@@ -293,13 +312,14 @@ def analyze_data(
                 _show_single_table_data_cached(database, table, limit, force_refresh, csv_output)
         else:
             # Show comprehensive data analysis including CZRN generation
-            console.print(f"[blue]Running comprehensive analysis on {limit:,} records...[/blue]")
+            source_desc = "SpendLogs table" if source == "logs" else "user tables"
+            console.print(f"[blue]Running comprehensive analysis on {limit:,} records from {source_desc}...[/blue]")
             analyzer = DataAnalyzer(database)
-            results = analyzer.analyze(limit=limit, force_refresh=force_refresh, show_czrn_analysis=not disable_czrn)
+            results = analyzer.analyze(limit=limit, force_refresh=force_refresh, show_czrn_analysis=not disable_czrn, source=source)
 
             console.print("\n[bold]Comprehensive Data Analysis:[/bold]")
             console.print("=" * 60)
-            analyzer.print_results(results)
+            analyzer.print_results(results, source)
 
             if json_output:
                 json_path = Path(json_output)
@@ -959,25 +979,31 @@ def _parse_date_specification(mode: str, date_spec: Optional[str], user_timezone
         raise typer.Exit(1)
 
 
-def _load_filtered_data(database, date_filter: Optional[dict], limit: Optional[int]):
+def _load_filtered_data(database, date_filter: Optional[dict], limit: Optional[int], source: str = "usertable"):
     """Load data with optional date filtering."""
     import polars as pl
 
     # For now, load all data and filter in memory
     # In a production system, you'd want to filter at the database level
-    data = database.get_usage_data(limit=limit)
+    if source == "logs":
+        data = database.get_spend_logs_for_analysis(limit=limit)
+    else:
+        data = database.get_usage_data(limit=limit)
 
     if not date_filter or 'start_date' not in date_filter:
         return data
 
     # Filter data by date range if specified
-    if 'date' in data.columns:
+    # Use different date columns based on source
+    date_column = 'start_time' if source == "logs" and 'start_time' in data.columns else 'date'
+
+    if date_column in data.columns:
         start_date = date_filter['start_date']
         end_date = date_filter['end_date']
 
         # Convert to date strings for comparison
         filtered_data = data.filter(
-            (pl.col('date') >= start_date) & (pl.col('date') <= end_date)
+            (pl.col(date_column) >= start_date) & (pl.col(date_column) <= end_date)
         )
 
         console.print(f"[dim]Filtered from {len(data)} to {len(filtered_data)} records for date range[/dim]")

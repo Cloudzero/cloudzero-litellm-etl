@@ -97,12 +97,12 @@ class LiteLLMDatabase:
             SELECT
                 s.id,
                 s.date,
-                s.user_id as entity_id,
-                'user' as entity_type,
-                s.api_key,
-                s.model,
-                s.model_group,
-                s.custom_llm_provider,
+                s.user_id::text as entity_id,
+                'user'::text as entity_type,
+                s.api_key::text,
+                s.model::text,
+                s.model_group::text,
+                s.custom_llm_provider::text,
                 s.prompt_tokens,
                 s.completion_tokens,
                 s.spend,
@@ -114,17 +114,17 @@ class LiteLLMDatabase:
                 s.created_at,
                 s.updated_at,
                 -- Enriched API key information
-                vt.key_name,
-                vt.key_alias,
+                vt.key_name::text,
+                vt.key_alias::text,
                 -- Enriched user information
-                u.user_alias,
-                u.user_email,
+                u.user_alias::text,
+                u.user_email::text,
                 -- Enriched team information
-                t.team_alias,
-                t.team_id,
+                t.team_alias::text,
+                COALESCE(vt.team_id, t.team_id)::text as team_id,
                 -- Enriched organization information
-                o.organization_alias,
-                o.organization_id
+                o.organization_alias::text,
+                COALESCE(vt.organization_id, o.organization_id)::text as organization_id
             FROM "LiteLLM_DailyUserSpend" s
             LEFT JOIN "LiteLLM_VerificationToken" vt ON s.api_key = vt.token
             LEFT JOIN "LiteLLM_UserTable" u ON vt.user_id = u.user_id
@@ -137,12 +137,12 @@ class LiteLLMDatabase:
             SELECT
                 s.id,
                 s.date,
-                s.team_id as entity_id,
-                'team' as entity_type,
-                s.api_key,
-                s.model,
-                s.model_group,
-                s.custom_llm_provider,
+                s.team_id::text as entity_id,
+                'team'::text as entity_type,
+                s.api_key::text,
+                s.model::text,
+                s.model_group::text,
+                s.custom_llm_provider::text,
                 s.prompt_tokens,
                 s.completion_tokens,
                 s.spend,
@@ -154,17 +154,17 @@ class LiteLLMDatabase:
                 s.created_at,
                 s.updated_at,
                 -- Enriched API key information
-                vt.key_name,
-                vt.key_alias,
+                vt.key_name::text,
+                vt.key_alias::text,
                 -- Enriched user information (may be null for team records)
-                u.user_alias,
-                u.user_email,
+                u.user_alias::text,
+                u.user_email::text,
                 -- Enriched team information
-                t.team_alias,
-                t.team_id,
+                COALESCE(t.team_alias, s.team_id)::text as team_alias,
+                COALESCE(vt.team_id, t.team_id, s.team_id)::text as team_id,
                 -- Enriched organization information
-                o.organization_alias,
-                o.organization_id
+                o.organization_alias::text,
+                COALESCE(vt.organization_id, o.organization_id)::text as organization_id
             FROM "LiteLLM_DailyTeamSpend" s
             LEFT JOIN "LiteLLM_VerificationToken" vt ON s.api_key = vt.token
             LEFT JOIN "LiteLLM_UserTable" u ON vt.user_id = u.user_id
@@ -375,6 +375,107 @@ class LiteLLMDatabase:
 
         conn = self.connect()
         try:
+            return pl.read_database(query, conn)
+        finally:
+            conn.close()
+
+    def get_spend_logs_data(self, limit: int | None = None) -> pl.DataFrame:
+        """Retrieve transaction-level data from LiteLLM_SpendLogs table with detailed request information."""
+        conn = self.connect()
+        try:
+            # First, discover what columns exist in the SpendLogs table
+            columns_query = """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'LiteLLM_SpendLogs'
+            AND table_schema = 'public'
+            ORDER BY ordinal_position;
+            """
+            columns_df = pl.read_database(columns_query, conn)
+
+            if columns_df.is_empty():
+                raise ValueError("LiteLLM_SpendLogs table does not exist")
+
+            available_columns = [row['column_name'] for row in columns_df.to_dicts()]
+
+            # Build SELECT clause with only available columns
+            select_parts = []
+            for col in available_columns:
+                if col in ['startTime', 'endTime', 'completionStartTime']:
+                    select_parts.append(f'"{col}"::timestamp')
+                elif col in ['spend']:
+                    select_parts.append(f'{col}::decimal')
+                elif col in ['total_tokens', 'prompt_tokens', 'completion_tokens']:
+                    select_parts.append(f'{col}::integer')
+                elif col in ['cache_hit']:
+                    select_parts.append(f'{col}::boolean')
+                else:
+                    select_parts.append(f'{col}::text')
+
+            query = f"""
+            SELECT {', '.join(select_parts)}
+            FROM "LiteLLM_SpendLogs"
+            ORDER BY "startTime" DESC
+            """
+
+            if limit:
+                query += f" LIMIT {limit}"
+
+            return pl.read_database(query, conn)
+        finally:
+            conn.close()
+
+    def get_spend_logs_for_analysis(self, limit: int | None = None) -> pl.DataFrame:
+        """Retrieve SpendLogs data enriched with org information for CZRN/CBF analysis."""
+        conn = self.connect()
+        try:
+            # Enhanced query with organization lookup tables for analysis
+            query = """
+            SELECT
+                s.request_id::text,
+                s.call_type::text,
+                s.api_key::text,
+                s.spend::decimal,
+                s.total_tokens::integer,
+                s.prompt_tokens::integer,
+                s.completion_tokens::integer,
+                s."startTime"::timestamp as start_time,
+                s.model::text,
+                s.model_group::text,
+                s.custom_llm_provider::text,
+                s."user"::text as entity_id,
+                'user'::text as entity_type,
+                s.team_id::text,
+                s.end_user::text,
+                -- API request count (1 per log entry)
+                1 as api_requests,
+                1 as successful_requests,
+                0 as failed_requests,
+                -- Enriched API key information
+                vt.key_name::text,
+                vt.key_alias::text,
+                -- Enriched user information
+                u.user_alias::text,
+                u.user_email::text,
+                -- Enriched team information
+                t.team_alias::text,
+                COALESCE(vt.team_id, t.team_id, s.team_id)::text as enriched_team_id,
+                -- Enriched organization information
+                o.organization_alias::text,
+                COALESCE(vt.organization_id, o.organization_id)::text as organization_id,
+                -- Map start_time to date for compatibility
+                s."startTime"::date as date
+            FROM "LiteLLM_SpendLogs" s
+            LEFT JOIN "LiteLLM_VerificationToken" vt ON s.api_key = vt.token
+            LEFT JOIN "LiteLLM_UserTable" u ON s."user" = u.user_id
+            LEFT JOIN "LiteLLM_TeamTable" t ON COALESCE(vt.team_id, s.team_id) = t.team_id
+            LEFT JOIN "LiteLLM_OrganizationTable" o ON vt.organization_id = o.organization_id
+            ORDER BY s."startTime" DESC
+            """
+
+            if limit:
+                query += f" LIMIT {limit}"
+
             return pl.read_database(query, conn)
         finally:
             conn.close()

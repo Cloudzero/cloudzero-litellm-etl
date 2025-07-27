@@ -28,9 +28,9 @@ from rich.table import Table
 
 from .cached_database import CachedLiteLLMDatabase
 from .czrn import CZRNGenerator
+from .data_processor import DataProcessor
 from .database import LiteLLMDatabase
 from .error_tracking import ConsolidatedErrorTracker
-from .transform import CBFTransformer
 
 
 class DataAnalyzer:
@@ -41,35 +41,45 @@ class DataAnalyzer:
         self.database = database
         self.console = Console()
 
-    def analyze(self, limit: int = 10000, force_refresh: bool = False, show_czrn_analysis: bool = True) -> dict[str, Any]:
+    def analyze(self, limit: int = 10000, force_refresh: bool = False, show_czrn_analysis: bool = True, source: str = "usertable") -> dict[str, Any]:
         """Perform comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation.
 
         Args:
             limit: Number of records to analyze
             force_refresh: Force refresh cache from server
             show_czrn_analysis: Whether to include detailed CZRN generation analysis
+            source: Data source - 'usertable' for user/team/tag tables or 'logs' for SpendLogs table
         """
-        if isinstance(self.database, CachedLiteLLMDatabase):
-            raw_data = self.database.get_usage_data(limit=limit, force_refresh=force_refresh)
+        # Load data based on the specified source
+        if source == "logs":
+            # Use SpendLogs data with enriched organization information
+            if isinstance(self.database, CachedLiteLLMDatabase):
+                raw_data = self.database.get_spend_logs_for_analysis(limit=limit)
+            else:
+                raw_data = self.database.get_spend_logs_for_analysis(limit=limit)
         else:
-            raw_data = self.database.get_usage_data(limit=limit)
+            # Use traditional user/team/tag aggregated data
+            if isinstance(self.database, CachedLiteLLMDatabase):
+                raw_data = self.database.get_usage_data(limit=limit, force_refresh=force_refresh)
+            else:
+                raw_data = self.database.get_usage_data(limit=limit)
         table_info = self.database.get_table_info()
 
         # Filter data and show filtering summary
         data, filter_summary = self._filter_successful_requests(raw_data)
 
-        # Generate CBF transformation examples
+        # Generate CBF transformation examples using centralized processor
         cbf_examples = []
         if not data.is_empty():
-            transformer = CBFTransformer()
+            processor = DataProcessor(source=source)
             sample_data = data.head(3)  # Transform first 3 records as examples
-            cbf_data = transformer.transform(sample_data)
-            cbf_examples = cbf_data.to_dicts() if not cbf_data.is_empty() else []
+            _, cbf_records, _ = processor.process_dataframe(sample_data)
+            cbf_examples = cbf_records
 
         # CZRN analysis data (if requested)
         czrn_analysis_data = None
         if show_czrn_analysis and not data.is_empty():
-            czrn_analysis_data = self._perform_czrn_analysis(data)
+            czrn_analysis_data = self._perform_czrn_analysis(data, source)
 
         return {
             'table_info': table_info,
@@ -200,7 +210,7 @@ class DataAnalyzer:
 
         return filtered_data, filter_summary
 
-    def print_results(self, analysis: dict[str, Any]) -> None:
+    def print_results(self, analysis: dict[str, Any], source: str = "usertable") -> None:
         """Print analysis results to console using rich formatting."""
         table_info = analysis['table_info']
         data_summary = analysis['data_summary']
@@ -264,7 +274,7 @@ class DataAnalyzer:
         if analysis.get('czrn_analysis'):
             czrn_data = analysis['czrn_analysis']
             if czrn_data.get('field_analysis'):
-                czrn_data['error_tracker'].print_source_field_analysis(czrn_data['field_analysis'])
+                czrn_data['error_tracker'].print_source_field_analysis(czrn_data['field_analysis'], source)
         else:
             # Fallback to basic column analysis if CZRN analysis not available
             self._print_basic_column_analysis(column_analysis)
@@ -554,32 +564,27 @@ class DataAnalyzer:
 
             self.console.print()  # Add spacing between CZRNs
 
-    def _perform_czrn_analysis(self, data: pl.DataFrame) -> dict[str, Any]:
+    def _perform_czrn_analysis(self, data: pl.DataFrame, source: str = "usertable") -> dict[str, Any]:
         """Perform CZRN analysis on the provided data and return analysis results."""
-        # Initialize consolidated error tracker
+        # Use centralized processor for consistent analysis
+        processor = DataProcessor(source=source)
+
+        # Initialize consolidated error tracker for field analysis
         error_tracker = ConsolidatedErrorTracker()
 
         # Source data field analysis
-        field_analysis = error_tracker.analyze_source_fields(data)
+        field_analysis = error_tracker.analyze_source_fields(data, source)
 
-        # Generate CZRNs for the data with error tracking
-        czrn_generator = CZRNGenerator()
-        successful_czrns = set()  # For deduplication
-
-        for row in data.to_dicts():
-            error_tracker.increment_total()
-            try:
-                czrn = czrn_generator.create_from_litellm_data(row, error_tracker)
-                successful_czrns.add(czrn)
-            except Exception:
-                # Error already tracked by czrn_generator
-                continue
+        # Generate CZRNs and CBF records using centralized processor
+        czrns, cbf_records, error_summary = processor.process_dataframe(data)
+        successful_czrns = {czrn for czrn in czrns if czrn}
 
         return {
             'error_tracker': error_tracker,
             'field_analysis': field_analysis,
             'successful_czrns': successful_czrns,
-            'total_operations': error_tracker.total_operations
+            'total_operations': len(data),
+            'processor_errors': error_summary
         }
 
     def _print_basic_column_analysis(self, column_analysis: dict[str, dict[str, Any]]) -> None:
@@ -619,9 +624,9 @@ class DataAnalyzer:
 
     def get_error_tracker(self) -> ConsolidatedErrorTracker:
         """Get the current error tracker instance."""
-        # Create transformer to access its error tracker
-        transformer = CBFTransformer()
-        return transformer.error_tracker
+        # Create processor to access its error tracker
+        processor = DataProcessor()
+        return processor.error_tracker
 
     def _print_czrn_component_analysis(self, czrn_results: list[dict[str, Any]]) -> None:
         """Print analysis of CZRN components."""
@@ -795,6 +800,12 @@ class DataAnalyzer:
         self._analyze_spend_by_model(data)
         self._analyze_spend_by_provider(data)
         self._analyze_spend_trends(data)
+
+        # Add SpendLogs field analysis
+        self._analyze_spend_logs_fields(limit=limit)
+
+        # Add cost comparison between SpendLogs and user tables
+        self._analyze_cost_comparison(limit=limit, force_refresh=force_refresh)
 
     def _analyze_spend_by_entity(self, data: pl.DataFrame) -> None:
         """Analyze spending breakdown by entity type (teams vs users)."""
@@ -1053,6 +1064,106 @@ class DataAnalyzer:
         self.console.print(f"\n[bold cyan]📅 Recent Activity (Last {len(recent_days)} Days)[/bold cyan]")
         self.console.print(trend_table)
 
+    def _analyze_spend_logs_fields(self, limit: int | None = 1000) -> None:
+        """Analyze SpendLogs table fields and their unique values."""
+        self.console.print("\n[bold yellow]📋 SpendLogs Field Analysis[/bold yellow]")
+
+        try:
+            # Get SpendLogs data
+            if isinstance(self.database, CachedLiteLLMDatabase):
+                spend_logs_data = self.database.get_spend_logs_data(limit=limit)
+            else:
+                spend_logs_data = self.database.get_spend_logs_data(limit=limit)
+
+            if spend_logs_data.is_empty():
+                self.console.print("[yellow]No SpendLogs data available[/yellow]")
+                return
+
+            self.console.print(f"[dim]Analyzing {len(spend_logs_data):,} SpendLogs records[/dim]")
+
+            # Use the existing field analysis infrastructure
+            from .error_tracking import ConsolidatedErrorTracker
+            error_tracker = ConsolidatedErrorTracker()
+            field_analysis = error_tracker.analyze_source_fields(spend_logs_data, "logs")
+
+            # Create a simplified analysis table for SpendLogs-specific fields
+            from rich.box import SIMPLE
+            from rich.table import Table
+
+            logs_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
+            logs_table.add_column("Field Name", style="bold blue", no_wrap=False)
+            logs_table.add_column("Unique", justify="right", style="green", no_wrap=False)
+            logs_table.add_column("Null", justify="right", style="red", no_wrap=False)
+            logs_table.add_column("Sample Values", style="dim", no_wrap=False)
+
+            # Focus on key SpendLogs fields
+            key_fields = [
+                'request_id', 'call_type', 'api_key', 'spend', 'total_tokens',
+                'model', 'custom_llm_provider', 'user', 'team_id', 'end_user',
+                'cache_hit', 'session_id', 'api_base', 'requester_ip_address'
+            ]
+
+            for field_name in key_fields:
+                if field_name in field_analysis:
+                    analysis = field_analysis[field_name]
+
+                    # Format sample values
+                    sample_str = ""
+                    if analysis.sample_values:
+                        samples = analysis.sample_values[:3]  # Show first 3
+                        sample_str = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in samples])
+                        if len(analysis.sample_values) > 3:
+                            sample_str += f" (+{len(analysis.sample_values) - 3} more)"
+
+                    logs_table.add_row(
+                        field_name,
+                        f"{analysis.unique_count:,}",
+                        f"{analysis.null_count:,}" if analysis.null_count > 0 else "0",
+                        sample_str
+                    )
+
+            self.console.print(logs_table)
+
+            # Show JSONB field analysis
+            self._analyze_jsonb_fields(spend_logs_data)
+
+        except Exception as e:
+            self.console.print(f"[red]Error analyzing SpendLogs: {e}[/red]")
+            if "does not exist" in str(e) or "relation" in str(e):
+                self.console.print("[dim]SpendLogs table may not exist in this database[/dim]")
+
+    def _analyze_jsonb_fields(self, data: pl.DataFrame) -> None:
+        """Analyze JSONB fields in SpendLogs data."""
+        jsonb_fields = ['metadata', 'request_tags', 'messages', 'response']
+
+        for field in jsonb_fields:
+            if field in data.columns:
+                self.console.print(f"\n[bold cyan]🔍 {field.title()} Field Analysis[/bold cyan]")
+
+                series = data[field]
+                non_null_count = len(series) - series.null_count()
+
+                if non_null_count == 0:
+                    self.console.print(f"[dim]All {field} values are null[/dim]")
+                    continue
+
+                # Get unique non-null values for analysis
+                unique_values = series.filter(series.is_not_null()).unique().limit(5).to_list()
+
+                self.console.print(f"  Non-null records: {non_null_count:,}")
+                self.console.print(f"  Unique values: {series.n_unique():,}")
+
+                if unique_values:
+                    self.console.print("  Sample values:")
+                    for i, value in enumerate(unique_values[:3], 1):
+                        # Truncate long JSON strings for display
+                        value_str = str(value)
+                        if len(value_str) > 100:
+                            value_str = value_str[:97] + "..."
+                        self.console.print(f"    {i}. {value_str}")
+                else:
+                    self.console.print("  [dim]No sample values available[/dim]")
+
     def _print_deduplicated_czrn_list(self, czrns: list[str]) -> None:
         """Print a deduplicated list of CZRNs in a formatted table."""
         czrn_generator = CZRNGenerator()
@@ -1109,4 +1220,361 @@ class DataAnalyzer:
         from rich.console import Console
         wider_console = Console(width=200, force_terminal=True)
         wider_console.print(czrn_table)
+
+    def _analyze_cost_comparison(self, limit: int | None = None, force_refresh: bool = False) -> None:
+        """Compare costs between SpendLogs and user tables to identify discrepancies."""
+        self.console.print("\n[bold magenta]📊 Cost Comparison: SpendLogs vs User Tables[/bold magenta]")
+
+        try:
+            # Get data from both sources
+            if isinstance(self.database, CachedLiteLLMDatabase):
+                usertable_data = self.database.get_spend_analysis_data(limit=limit, force_refresh=force_refresh)
+                spendlogs_data = self.database.get_spend_logs_for_analysis(limit=limit)
+            else:
+                usertable_data = self.database.get_spend_analysis_data(limit=limit)
+                spendlogs_data = self.database.get_spend_logs_for_analysis(limit=limit)
+
+            # Calculate key metrics for each source
+            usertable_metrics = self._calculate_spend_metrics(usertable_data, "User Tables")
+            spendlogs_metrics = self._calculate_spend_metrics(spendlogs_data, "SpendLogs")
+
+            # Display comparison table
+            self._display_cost_comparison_table(usertable_metrics, spendlogs_metrics)
+
+            # Analyze date ranges and coverage
+            self._analyze_date_coverage(usertable_data, spendlogs_data)
+
+            # Analyze provider and model coverage
+            self._analyze_provider_coverage(usertable_data, spendlogs_data)
+
+            # Calculate potential discrepancies
+            self._analyze_cost_discrepancies(usertable_metrics, spendlogs_metrics)
+
+        except Exception as e:
+            self.console.print(f"[red]Error during cost comparison: {e}[/red]")
+
+    def _calculate_spend_metrics(self, data: pl.DataFrame, source_name: str) -> dict:
+        """Calculate key spending metrics from a data source."""
+        if data.is_empty():
+            return {
+                'source': source_name,
+                'total_records': 0,
+                'total_spend': 0.0,
+                'unique_providers': 0,
+                'unique_models': 0,
+                'total_requests': 0,
+                'total_tokens': 0,
+                'avg_cost_per_request': 0.0,
+                'avg_cost_per_token': 0.0,
+                'date_range': {'start': None, 'end': None}
+            }
+
+        # Calculate metrics
+        total_records = len(data)
+        total_spend = float(data.select(pl.col('spend').sum()).item())
+
+        # Handle different column names between sources
+        try:
+            unique_providers = int(data.select(pl.col('custom_llm_provider').n_unique()).item())
+        except Exception:
+            unique_providers = 0
+
+        try:
+            unique_models = int(data.select(pl.col('model').n_unique()).item())
+        except Exception:
+            unique_models = 0
+
+        # Calculate request totals
+        try:
+            total_requests = int(data.select(pl.col('api_requests').sum()).item())
+        except Exception:
+            # For SpendLogs, count number of records as requests
+            total_requests = total_records
+
+        # Calculate token totals
+        try:
+            prompt_tokens = int(data.select(pl.col('prompt_tokens').sum()).item() or 0)
+            completion_tokens = int(data.select(pl.col('completion_tokens').sum()).item() or 0)
+            total_tokens = prompt_tokens + completion_tokens
+        except Exception:
+            total_tokens = 0
+
+        # Calculate averages
+        avg_cost_per_request = total_spend / total_requests if total_requests > 0 else 0.0
+        avg_cost_per_token = total_spend / total_tokens if total_tokens > 0 else 0.0
+
+        # Get date range
+        try:
+            date_col = 'date' if 'date' in data.columns else 'start_time'
+            date_stats = data.select([
+                pl.col(date_col).min().alias('start_date'),
+                pl.col(date_col).max().alias('end_date')
+            ]).to_dicts()[0]
+            date_range = {
+                'start': date_stats['start_date'],
+                'end': date_stats['end_date']
+            }
+        except Exception:
+            date_range = {'start': None, 'end': None}
+
+        return {
+            'source': source_name,
+            'total_records': total_records,
+            'total_spend': total_spend,
+            'unique_providers': unique_providers,
+            'unique_models': unique_models,
+            'total_requests': total_requests,
+            'total_tokens': total_tokens,
+            'avg_cost_per_request': avg_cost_per_request,
+            'avg_cost_per_token': avg_cost_per_token,
+            'date_range': date_range
+        }
+
+    def _display_cost_comparison_table(self, usertable_metrics: dict, spendlogs_metrics: dict) -> None:
+        """Display a comparison table of key metrics between sources."""
+        from rich.box import SIMPLE
+        from rich.table import Table
+
+        # Create comparison table
+        table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
+        table.add_column("Metric", style="bold green", no_wrap=False)
+        table.add_column("User Tables", style="blue", justify="right", no_wrap=False)
+        table.add_column("SpendLogs", style="yellow", justify="right", no_wrap=False)
+        table.add_column("Difference", style="magenta", justify="right", no_wrap=False)
+        table.add_column("% Diff", style="red", justify="right", no_wrap=False)
+
+        # Helper function to calculate percentage difference
+        def calc_percent_diff(val1, val2):
+            if val1 == 0 and val2 == 0:
+                return "0%"
+            if val1 == 0:
+                return "∞"
+            return f"{((val2 - val1) / val1) * 100:.1f}%"
+
+        # Add rows for each metric
+        metrics_to_compare = [
+            ('Total Records', 'total_records', lambda x: f"{x:,}"),
+            ('Total Spend', 'total_spend', lambda x: f"${x:.2f}"),
+            ('Unique Providers', 'unique_providers', lambda x: f"{x:,}"),
+            ('Unique Models', 'unique_models', lambda x: f"{x:,}"),
+            ('Total Requests', 'total_requests', lambda x: f"{x:,}"),
+            ('Total Tokens', 'total_tokens', lambda x: f"{x:,}"),
+            ('Avg Cost/Request', 'avg_cost_per_request', lambda x: f"${x:.4f}"),
+            ('Avg Cost/Token', 'avg_cost_per_token', lambda x: f"${x:.6f}")
+        ]
+
+        for metric_name, metric_key, formatter in metrics_to_compare:
+            ut_val = usertable_metrics[metric_key]
+            sl_val = spendlogs_metrics[metric_key]
+            diff = sl_val - ut_val
+            percent_diff = calc_percent_diff(ut_val, sl_val)
+
+            # Color code the difference
+            if abs(diff) < 0.01 and metric_key in ['total_spend', 'avg_cost_per_request', 'avg_cost_per_token']:
+                diff_color = "green"
+            elif diff > 0:
+                diff_color = "yellow"
+            else:
+                diff_color = "red"
+
+            # Format difference based on metric type
+            if metric_key == 'total_spend':
+                diff_str = f"[{diff_color}]${diff:.2f}[/{diff_color}]"
+            elif metric_key in ['avg_cost_per_request', 'avg_cost_per_token']:
+                diff_str = f"[{diff_color}]${diff:.6f}[/{diff_color}]"
+            else:
+                diff_str = f"[{diff_color}]{diff:,}[/{diff_color}]"
+
+            table.add_row(
+                metric_name,
+                formatter(ut_val),
+                formatter(sl_val),
+                diff_str,
+                f"[{diff_color}]{percent_diff}[/{diff_color}]"
+            )
+
+        self.console.print(table)
+
+    def _analyze_date_coverage(self, usertable_data: pl.DataFrame, spendlogs_data: pl.DataFrame) -> None:
+        """Analyze date range coverage between sources."""
+        self.console.print("\n[bold cyan]📅 Date Range Coverage Analysis[/bold cyan]")
+
+        # Get date ranges for both sources
+        ut_dates = self._get_date_range(usertable_data, 'date')
+        sl_dates = self._get_date_range(spendlogs_data, 'start_time')
+
+        from rich.box import SIMPLE
+        from rich.table import Table
+
+        date_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
+        date_table.add_column("Source", style="bold green", no_wrap=False)
+        date_table.add_column("Earliest Date", style="blue", no_wrap=False)
+        date_table.add_column("Latest Date", style="yellow", no_wrap=False)
+        date_table.add_column("Days Covered", style="magenta", justify="right", no_wrap=False)
+
+        date_table.add_row(
+            "User Tables",
+            str(ut_dates['start']) if ut_dates['start'] else "N/A",
+            str(ut_dates['end']) if ut_dates['end'] else "N/A",
+            str(ut_dates['days']) if ut_dates['days'] else "N/A"
+        )
+
+        date_table.add_row(
+            "SpendLogs",
+            str(sl_dates['start']) if sl_dates['start'] else "N/A",
+            str(sl_dates['end']) if sl_dates['end'] else "N/A",
+            str(sl_dates['days']) if sl_dates['days'] else "N/A"
+        )
+
+        self.console.print(date_table)
+
+        # Analyze overlaps and gaps
+        if ut_dates['start'] and sl_dates['start']:
+            self.console.print("\n[dim]💡 Coverage Analysis:[/dim]")
+            if ut_dates['start'] < sl_dates['start']:
+                gap_days = (sl_dates['start'] - ut_dates['start']).days
+                self.console.print(f"[yellow]  • User Tables have {gap_days} days of data before SpendLogs start[/yellow]")
+            elif sl_dates['start'] < ut_dates['start']:
+                gap_days = (ut_dates['start'] - sl_dates['start']).days
+                self.console.print(f"[yellow]  • SpendLogs have {gap_days} days of data before User Tables start[/yellow]")
+            else:
+                self.console.print("[green]  • Both sources start on the same date[/green]")
+
+    def _analyze_provider_coverage(self, usertable_data: pl.DataFrame, spendlogs_data: pl.DataFrame) -> None:
+        """Analyze provider and model coverage between sources."""
+        self.console.print("\n[bold cyan]🔌 Provider & Model Coverage Analysis[/bold cyan]")
+
+        # Get unique providers and models from both sources
+        try:
+            ut_providers = set(usertable_data.select('custom_llm_provider').to_series().unique().to_list())
+        except Exception:
+            ut_providers = set()
+
+        try:
+            ut_models = set(usertable_data.select('model').to_series().unique().to_list())
+        except Exception:
+            ut_models = set()
+
+        try:
+            sl_providers = set(spendlogs_data.select('custom_llm_provider').to_series().unique().to_list())
+        except Exception:
+            sl_providers = set()
+
+        try:
+            sl_models = set(spendlogs_data.select('model').to_series().unique().to_list())
+        except Exception:
+            sl_models = set()
+
+        # Calculate overlaps and differences
+        common_providers = ut_providers & sl_providers
+        ut_only_providers = ut_providers - sl_providers
+        sl_only_providers = sl_providers - ut_providers
+
+        common_models = ut_models & sl_models
+        ut_only_models = ut_models - sl_models
+        sl_only_models = sl_models - ut_models
+
+        self.console.print(f"[green]✓ Common Providers ({len(common_providers)}):[/green] {', '.join(sorted(common_providers))}")
+        if ut_only_providers:
+            self.console.print(f"[yellow]⚠ User Tables Only ({len(ut_only_providers)}):[/yellow] {', '.join(sorted(ut_only_providers))}")
+        if sl_only_providers:
+            self.console.print(f"[blue]ℹ SpendLogs Only ({len(sl_only_providers)}):[/blue] {', '.join(sorted(sl_only_providers))}")
+
+        self.console.print(f"\n[green]✓ Common Models ({len(common_models)}):[/green]")
+        if len(common_models) <= 10:
+            self.console.print(f"  {', '.join(sorted(common_models))}")
+        else:
+            self.console.print(f"  {', '.join(sorted(list(common_models)[:10]))} ... and {len(common_models)-10} more")
+
+        if ut_only_models:
+            self.console.print(f"[yellow]⚠ User Tables Only Models ({len(ut_only_models)}):[/yellow]")
+            if len(ut_only_models) <= 5:
+                self.console.print(f"  {', '.join(sorted(ut_only_models))}")
+            else:
+                self.console.print(f"  {', '.join(sorted(list(ut_only_models)[:5]))} ... and {len(ut_only_models)-5} more")
+
+        if sl_only_models:
+            self.console.print(f"[blue]ℹ SpendLogs Only Models ({len(sl_only_models)}):[/blue]")
+            if len(sl_only_models) <= 5:
+                self.console.print(f"  {', '.join(sorted(sl_only_models))}")
+            else:
+                self.console.print(f"  {', '.join(sorted(list(sl_only_models)[:5]))} ... and {len(sl_only_models)-5} more")
+
+    def _analyze_cost_discrepancies(self, usertable_metrics: dict, spendlogs_metrics: dict) -> None:
+        """Analyze and highlight significant cost discrepancies."""
+        self.console.print("\n[bold red]🚨 Cost Discrepancy Analysis[/bold red]")
+
+        ut_spend = usertable_metrics['total_spend']
+        sl_spend = spendlogs_metrics['total_spend']
+
+        if ut_spend == 0 and sl_spend == 0:
+            self.console.print("[green]✓ Both sources report zero spend[/green]")
+            return
+
+        spend_diff = sl_spend - ut_spend
+        spend_percent_diff = abs(spend_diff) / max(ut_spend, sl_spend) * 100 if max(ut_spend, sl_spend) > 0 else 0
+
+        # Classify discrepancy severity
+        if spend_percent_diff < 1:
+            severity = "green"
+            status = "✓ MINIMAL"
+        elif spend_percent_diff < 5:
+            severity = "yellow"
+            status = "⚠ MINOR"
+        elif spend_percent_diff < 20:
+            severity = "yellow"
+            status = "⚠ MODERATE"
+        else:
+            severity = "red"
+            status = "🚨 MAJOR"
+
+        self.console.print(f"[{severity}]{status} DISCREPANCY: {spend_percent_diff:.1f}% difference[/{severity}]")
+
+        if spend_diff > 0:
+            self.console.print(f"[blue]SpendLogs reports ${spend_diff:.2f} MORE than User Tables[/blue]")
+        else:
+            self.console.print(f"[yellow]User Tables report ${abs(spend_diff):.2f} MORE than SpendLogs[/yellow]")
+
+        # Provide potential explanations
+        self.console.print("\n[dim]💡 Potential Explanations:[/dim]")
+        if spend_percent_diff > 5:
+            self.console.print("[dim]  • Different aggregation periods (daily vs transaction-level)[/dim]")
+            self.console.print("[dim]  • Data processing delays or timing differences[/dim]")
+            self.console.print("[dim]  • Different filtering or inclusion criteria[/dim]")
+            self.console.print("[dim]  • Failed requests included in one source but not the other[/dim]")
+        else:
+            self.console.print("[dim]  • Normal variance due to aggregation timing[/dim]")
+
+    def _get_date_range(self, data: pl.DataFrame, date_col: str) -> dict:
+        """Get date range information from a DataFrame."""
+        if data.is_empty() or date_col not in data.columns:
+            return {'start': None, 'end': None, 'days': None}
+
+        try:
+            date_stats = data.select([
+                pl.col(date_col).min().alias('start_date'),
+                pl.col(date_col).max().alias('end_date')
+            ]).to_dicts()[0]
+
+            start_date = date_stats['start_date']
+            end_date = date_stats['end_date']
+
+            if start_date and end_date:
+                # Convert to date objects if they're datetime
+                if hasattr(start_date, 'date'):
+                    start_date = start_date.date()
+                if hasattr(end_date, 'date'):
+                    end_date = end_date.date()
+
+                days = (end_date - start_date).days + 1
+            else:
+                days = None
+
+            return {
+                'start': start_date,
+                'end': end_date,
+                'days': days
+            }
+        except Exception:
+            return {'start': None, 'end': None, 'days': None}
 

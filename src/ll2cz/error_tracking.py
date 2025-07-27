@@ -26,10 +26,6 @@ from rich.console import Console
 from rich.table import Table
 
 from .transformations import (
-    CBF_CONSTANT_MAPPINGS,
-    CBF_FIELD_MAPPINGS,
-    CZRN_CONSTANT_MAPPINGS,
-    CZRN_FIELD_MAPPINGS,
     extract_model_name,
     normalize_component,
     normalize_service,
@@ -89,13 +85,16 @@ class ConsolidatedErrorTracker:
         """Increment total operations counter."""
         self.total_operations += 1
 
-    def analyze_source_fields(self, data: pl.DataFrame) -> Dict[str, SourceFieldAnalysis]:
+    def analyze_source_fields(self, data: pl.DataFrame, source: str = "usertable") -> Dict[str, SourceFieldAnalysis]:
         """Analyze source data fields and their mappings to CZRN/CBF components."""
         field_analysis = {}
 
-        # Use centralized field mappings from transformations module
-        czrn_mappings = CZRN_FIELD_MAPPINGS
-        cbf_mappings = CBF_FIELD_MAPPINGS
+        # Use centralized field mappings from DataProcessor
+        from .data_processor import DataProcessor
+        processor = DataProcessor(source=source)
+        mappings = processor.get_field_mappings()
+        czrn_mappings = mappings["czrn"]
+        cbf_mappings = mappings["cbf"]
 
         for column in data.columns:
             series = data[column]
@@ -129,7 +128,9 @@ class ConsolidatedErrorTracker:
             )
 
         # Add constant/derived CZRN components for complete schema visibility
-        for constant_field, czrn_mapping in CZRN_CONSTANT_MAPPINGS.items():
+        # Filter only CZRN constants (those starting and ending with __)
+        czrn_constants = {k: v for k, v in czrn_mappings.items() if k.startswith('__') and k.endswith('__')}
+        for constant_field, czrn_mapping in czrn_constants.items():
             # Generate sample values for constants
             if constant_field == '__provider__':
                 sample_values = ['litellm']
@@ -137,20 +138,21 @@ class ConsolidatedErrorTracker:
                 sample_values = ['cross-region']
             elif constant_field == '__cloud_local_id__':
                 # Show example based on actual data if available
-                if 'custom_llm_provider' in data.columns and 'model' in data.columns:
+                resource_field = processor.resource_type_field  # Use dynamic field based on source
+                if 'custom_llm_provider' in data.columns and resource_field in data.columns:
                     provider_sample = data['custom_llm_provider'].limit(1).to_list()
-                    model_sample = data['model'].limit(1).to_list()
-                    if provider_sample and model_sample:
+                    resource_sample = data[resource_field].limit(1).to_list()
+                    if provider_sample and resource_sample:
                         provider = str(provider_sample[0])
-                        model = str(model_sample[0])
-                        if provider not in model:
-                            sample_values = [f'{provider}/{model}']
-                        else:
-                            sample_values = [model]
+                        resource = str(resource_sample[0])
+                        cloud_local_id = f'{provider}/{resource}'
+                        # Replace colons with pipes for compatibility
+                        cloud_local_id = cloud_local_id.replace(':', '|')
+                        sample_values = [cloud_local_id]
                     else:
-                        sample_values = ['provider/model-name']
+                        sample_values = ['provider/resource-name']
                 else:
-                    sample_values = ['provider/model-name']
+                    sample_values = ['provider/resource-name']
             else:
                 sample_values = []
 
@@ -178,20 +180,23 @@ class ConsolidatedErrorTracker:
         )
 
         # Add constant/derived CBF fields for complete schema visibility
-        for constant_field, cbf_mapping in CBF_CONSTANT_MAPPINGS.items():
+        # Filter only CBF constants (those starting and ending with __)
+        cbf_constants = {k: v for k, v in cbf_mappings.items() if k.startswith('__') and k.endswith('__')}
+        for constant_field, cbf_mapping in cbf_constants.items():
             # Generate sample values for constants
             if constant_field == '__resource_id__':
                 # Show example cloud-local-id based on actual data if available
-                if 'custom_llm_provider' in data.columns and 'model' in data.columns:
+                resource_field = processor.resource_type_field  # Use dynamic field based on source
+                if 'custom_llm_provider' in data.columns and resource_field in data.columns:
                     provider_sample = data['custom_llm_provider'].limit(1).to_list()
-                    model_sample = data['model'].limit(1).to_list()
-                    if provider_sample and model_sample:
+                    resource_sample = data[resource_field].limit(1).to_list()
+                    if provider_sample and resource_sample:
                         provider = str(provider_sample[0])
-                        model = str(model_sample[0])
-                        if provider not in model:
-                            sample_values = [f'{provider}/{model}']
-                        else:
-                            sample_values = [model]
+                        resource = str(resource_sample[0])
+                        cloud_local_id = f'{provider}/{resource}'
+                        # Replace colons with pipes for compatibility
+                        cloud_local_id = cloud_local_id.replace(':', '|')
+                        sample_values = [cloud_local_id]
                     else:
                         sample_values = ['openai/gpt-4']
                 else:
@@ -251,7 +256,7 @@ class ConsolidatedErrorTracker:
             'error_fields': dict(error_fields)
         }
 
-    def print_source_field_analysis(self, field_analysis: Dict[str, SourceFieldAnalysis]) -> None:
+    def print_source_field_analysis(self, field_analysis: Dict[str, SourceFieldAnalysis], source: str = "usertable") -> None:
         """Print comprehensive source field analysis with mappings."""
         self.console.print("\n[bold blue]📊 Source Data Field Analysis & CZRN/CBF Mappings[/bold blue]")
 
@@ -323,10 +328,18 @@ class ConsolidatedErrorTracker:
                 samples_to_transform = analysis.sample_values[:3]
 
                 # Apply appropriate transformation based on field mapping
+                # Get processor to determine dynamic field handling
+                from .data_processor import DataProcessor
+                DataProcessor(source=source)
+
                 for sample_value in samples_to_transform:
                     try:
                         if field_name == 'model':
                             transformed = extract_model_name(str(sample_value))
+                            mapped_samples.append(f"'{transformed}'")
+                        elif field_name == 'call_type':
+                            # For call_type, use normalize_component (direct mapping)
+                            transformed = normalize_component(str(sample_value))
                             mapped_samples.append(f"'{transformed}'")
                         elif field_name == 'custom_llm_provider':
                             transformed = normalize_service(str(sample_value))

@@ -189,3 +189,17 @@ class CachedLiteLLMDatabase:
     def is_offline_mode(self) -> bool:
         """Check if currently operating in offline mode."""
         return self.database is None
+
+    def get_spend_logs_data(self, limit: Optional[int] = None) -> pl.DataFrame:
+        """Get SpendLogs data from database (no caching for transaction-level data)."""
+        if not self.database:
+            raise ConnectionError("SpendLogs data requires active server connection")
+
+        return self.database.get_spend_logs_data(limit=limit)
+
+    def get_spend_logs_for_analysis(self, limit: Optional[int] = None) -> pl.DataFrame:
+        """Get enriched SpendLogs data for CZRN/CBF analysis (no caching for transaction-level data)."""
+        if not self.database:
+            raise ConnectionError("SpendLogs analysis data requires active server connection")
+
+        return self.database.get_spend_logs_for_analysis(limit=limit)

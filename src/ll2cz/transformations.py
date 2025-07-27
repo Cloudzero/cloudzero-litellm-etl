@@ -444,4 +444,46 @@ CBF_CONSTANT_MAPPINGS = {
     '__resource_id__': 'resource/id (cloud-local-id)',
     '__usage_units__': 'usage/units (constant: "tokens")',
     '__lineitem_type__': 'lineitem/type (constant: "Usage")',
+    '__resource_tag_czrn__': 'resource/tag:czrn (full CZRN)',
+}
+
+# SpendLogs-specific field mappings (when --source logs is used)
+SPENDLOGS_CZRN_FIELD_MAPPINGS = {
+    'custom_llm_provider': 'service-type (via normalize_service)',
+    'key_alias': 'owner-account-id (via normalize_component, preferred)',
+    'api_key': 'owner-account-id (via normalize_component, fallback)',
+    'call_type': 'resource-type (direct mapping)',  # KEY DIFFERENCE: use call_type instead of model
+    # Note: provider='litellm' (constant), region='cross-region' (constant)
+    # cloud-local-id is derived from custom_llm_provider + model
+}
+
+SPENDLOGS_CBF_FIELD_MAPPINGS = {
+    # Standard CBF fields
+    'start_time': 'time/usage_start (via parse_date)',
+    'spend': 'cost/cost',
+    'prompt_tokens': 'usage/amount (partial)',
+    'completion_tokens': 'usage/amount (partial)',
+    'custom_llm_provider': 'resource/service (via normalize_service)',
+    'key_alias': 'resource/account (via normalize_component, preferred)',
+    'api_key': 'resource/account (via normalize_component, fallback)',
+    'call_type': 'resource/usage_family (direct mapping)',  # KEY DIFFERENCE: use call_type instead of model
+    # Resource tags - SpendLogs-specific fields
+    'request_id': 'resource/tag:request_id',
+    'entity_type': 'resource/tag:entity_type',
+    'entity_id': 'resource/tag:entity_id',
+    'model': 'resource/tag:model',  # Model becomes a tag in SpendLogs
+    'model_group': 'resource/tag:model_group',
+    'team_id': 'resource/tag:team_id',
+    'end_user': 'resource/tag:end_user',
+    # Resource tags - enriched API key information
+    'key_name': 'resource/tag:key_name',
+    # Resource tags - enriched user information
+    'user_alias': 'resource/tag:user_alias',
+    'user_email': 'resource/tag:user_email',
+    # Resource tags - enriched team information
+    'enriched_team_id': 'resource/tag:enriched_team_id',
+    'team_alias': 'resource/tag:team_alias',
+    # Resource tags - enriched organization information
+    'organization_alias': 'resource/tag:organization_alias',
+    'organization_id': 'resource/tag:organization_id',
 }

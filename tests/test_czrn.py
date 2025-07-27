@@ -192,3 +192,28 @@ class TestCZRNGenerator:
                 cloud_local_id=''  # Empty cloud local id
             )
 
+    def test_colon_replacement_in_cloud_local_id(self):
+        """Test that colons in cloud_local_id are replaced with pipes."""
+        generator = CZRNGenerator()
+
+        # Test with AWS Bedrock model that contains colons
+        bedrock_data = {
+            'entity_type': 'user',
+            'entity_id': 'test_user',
+            'model': 'us.anthropic.claude-3-haiku:0',
+            'date': '2024-01-01',
+            'custom_llm_provider': 'bedrock',
+            'api_key': 'sk-test123'
+        }
+
+        czrn = generator.create_from_litellm_data(bedrock_data)
+        
+        # Extract components to check cloud_local_id
+        components = generator.extract_components(czrn)
+        provider, service_type, region, owner_account_id, resource_type, cloud_local_id = components
+        
+        # Should contain pipes instead of colons
+        assert '|' in cloud_local_id
+        assert ':' not in cloud_local_id
+        assert cloud_local_id == 'bedrock/us.anthropic.claude-3-haiku|0'
+
