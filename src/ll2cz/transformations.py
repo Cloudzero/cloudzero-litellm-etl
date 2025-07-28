@@ -3,12 +3,71 @@
 
 """Transformation functions for converting LiteLLM data to CZRN and CBF formats."""
 
-import re
 from datetime import datetime
-from typing import Any, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 import litellm
 import polars as pl
+import yaml
+
+# Import the new model name extraction
+from .model_name_strategies import extract_model_name
+
+
+class ProviderNormalizer:
+    """Handle provider normalization using configuration."""
+    
+    def __init__(self, config_path: Optional[Path] = None):
+        """Initialize with configuration from YAML file."""
+        if config_path is None:
+            config_path = Path(__file__).parent / 'config' / 'providers.yml'
+        
+        # Load configuration
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                self.provider_mapping = config.get('provider_mappings', {})
+        else:
+            # Fallback to minimal defaults if config file doesn't exist
+            self.provider_mapping = {
+                'openai': 'openai',
+                'azure': 'azure',
+                'anthropic': 'anthropic',
+                'bedrock': 'aws',
+                'google': 'gcp',
+                'custom': 'custom'
+            }
+    
+    def normalize(self, provider: Union[str, litellm.LlmProviders, Any]) -> str:
+        """Normalize provider name."""
+        # Handle enum types
+        if hasattr(provider, 'value'):
+            provider_str = str(provider.value).lower()
+        else:
+            provider_str = str(provider).lower()
+        
+        # Check if we have an exact mapping first
+        if provider_str in self.provider_mapping:
+            return self.provider_mapping[provider_str]
+        
+        # For unmapped providers, try dropping text after first "_" or "-"
+        base_provider = provider_str
+        for separator in ['_', '-']:
+            if separator in provider_str:
+                base_provider = provider_str.split(separator)[0]
+                break
+        
+        # Check if the base provider has a mapping
+        if base_provider in self.provider_mapping:
+            return self.provider_mapping[base_provider]
+        
+        # Return the base provider or original if no separator found
+        return base_provider
+
+
+# Global instance for backward compatibility
+_provider_normalizer = ProviderNormalizer()
 
 
 def normalize_service(provider: Union[str, litellm.LlmProviders, Any]) -> str:
@@ -35,93 +94,7 @@ def normalize_service(provider: Union[str, litellm.LlmProviders, Any]) -> str:
         >>> normalize_service("custom_provider")
         'custom'
     """
-    # Handle enum types
-    if hasattr(provider, 'value'):
-        provider_str = str(provider.value).lower()
-    else:
-        provider_str = str(provider).lower()
-
-    # Define provider normalization mapping
-    provider_mapping = {
-        # OpenAI variants
-        'openai': 'openai',
-        'azure_openai': 'azure',
-        'azure': 'azure',
-
-        # Anthropic variants
-        'anthropic': 'anthropic',
-        'claude': 'anthropic',
-
-        # AWS services
-        'bedrock': 'aws',
-        'aws_bedrock': 'aws',
-        'sagemaker': 'aws',
-        'aws_sagemaker': 'aws',
-        'amazon_bedrock': 'aws',
-        'amazon': 'aws',
-
-        # Google/GCP services
-        'vertex_ai': 'gcp',
-        'gemini': 'gcp',
-        'google': 'gcp',
-        'gcp': 'gcp',
-        'googleai': 'gcp',
-        'google_vertex': 'gcp',
-        'google_gemini': 'gcp',
-        'palm': 'gcp',
-
-        # Meta/Facebook
-        'meta': 'meta',
-        'facebook': 'meta',
-        'llama': 'meta',
-
-        # Microsoft
-        'microsoft': 'microsoft',
-        'bing': 'microsoft',
-
-        # Other providers
-        'cohere': 'cohere',
-        'ai21': 'ai21',
-        'huggingface': 'huggingface',
-        'together_ai': 'together',
-        'together': 'together',
-        'fireworks_ai': 'fireworks',
-        'fireworks': 'fireworks',
-        'replicate': 'replicate',
-        'mistral': 'mistral',
-        'perplexity': 'perplexity',
-        'groq': 'groq',
-        'deepseek': 'deepseek',
-        'deepinfra': 'deepinfra',
-        'ollama': 'ollama',
-        'openrouter': 'openrouter',
-        'anyscale': 'anyscale',
-        'vllm': 'vllm',
-        'databricks': 'databricks',
-        'watsonx': 'ibm',
-        'ibm': 'ibm',
-        'custom': 'custom',
-        'local': 'local'
-    }
-
-    # Check if we have an exact mapping first
-    if provider_str in provider_mapping:
-        return provider_mapping[provider_str]
-
-    # For unmapped providers, try dropping text after first "_" or "-"
-    # e.g. "azure_ai" becomes "azure", "custom-llm" becomes "custom"
-    base_provider = provider_str
-    for separator in ['_', '-']:
-        if separator in provider_str:
-            base_provider = provider_str.split(separator)[0]
-            break
-
-    # Check if the base provider has a mapping
-    if base_provider in provider_mapping:
-        return provider_mapping[base_provider]
-
-    # Return the base provider (after dropping suffix) or original if no separator found
-    return base_provider
+    return _provider_normalizer.normalize(provider)
 
 
 def normalize_component(component: str, allow_uppercase: bool = False) -> str:
@@ -154,6 +127,7 @@ def normalize_component(component: str, allow_uppercase: bool = False) -> str:
 
     # Replace invalid characters with hyphens
     # Valid: alphanumeric and hyphens
+    import re
     component = re.sub(r'[^a-zA-Z0-9-]', '-', component)
 
     # Remove consecutive hyphens
@@ -166,167 +140,44 @@ def normalize_component(component: str, allow_uppercase: bool = False) -> str:
     return component if component else 'unknown'
 
 
-def extract_model_name(model: str) -> str:
-    """Extract the core model name by removing version-related information.
-
-    IMPORTANT: LLM model naming is subjective, inconsistent, and frankly insane across
-    different providers. This algorithm attempts to extract the "core" model name by
-    identifying and removing version-related components, but given the creative chaos
-    of model naming conventions, this code will likely need periodic updates as new
-    naming patterns emerge. The general intent is: preserve the model identity,
-    discard the version/variant info.
-
-    Key distinction:
-    - Letter + number (e.g., "o1", "m7") = model name (preserve)
-    - Number + letter (e.g., "4o", "3b") = version info (remove)
-
+def generate_resource_id(model: str, provider: str = None) -> str:
+    """Generate a consistent resource ID from model name for use as cloud-local-id in CZRN and resource/id in CBF.
+    
+    This function creates the unique identifier for a model resource by using the actual model name
+    (e.g., model_group) with colons replaced by pipes for compatibility.
+    
     Args:
-        model: Full model identifier string
-
+        model: The model name/identifier from LiteLLM (e.g., "gpt-4", "us.anthropic.claude-3-haiku:0")
+        provider: Optional provider name to prepend if not already in model string
+        
     Returns:
-        Extracted core model name
-
+        A consistent resource ID with colons replaced by pipes
+        
     Examples:
-        >>> extract_model_name("claude-3-5-haiku-20241022")
-        'claude-haiku'
-        >>> extract_model_name("claude-2.1")
-        'claude'
-        >>> extract_model_name("us.anthropic.claude-3-7-sonnet-20250219-v1:0")
-        'claude-sonnet'
-        >>> extract_model_name("gpt-4o")
-        'gpt'
-        >>> extract_model_name("o1-preview")
-        'o1'
-        >>> extract_model_name("text-moderation-stable")
-        'text-moderation'
+        >>> generate_resource_id("gpt-4", "openai")
+        'openai/gpt-4'
+        >>> generate_resource_id("openai/gpt-4")
+        'openai/gpt-4'
+        >>> generate_resource_id("us.anthropic.claude-3-haiku:0", "bedrock")
+        'bedrock/us.anthropic.claude-3-haiku|0'
+        >>> generate_resource_id("bedrock/us.amazon.nova-lite-v1:0")
+        'bedrock/us.amazon.nova-lite-v1|0'
     """
-    if not model:
-        return 'unknown'
-
-    original_model = model
-
-    # Handle provider path prefixes (e.g., "fireworks_ai/accounts/fireworks/models/deepseek-v3")
-    if '/' in model:
-        model = model.split('/')[-1]
-
-    # Handle AWS Bedrock format (e.g., "us.amazon.nova-lite-v1:0", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
-    if ':' in model and '.' in model:
-        # Extract the model part before the colon and after the provider
-        parts = model.split(':')[0].split('.')
-        if len(parts) >= 3:
-            if parts[1] == 'amazon':
-                model = '.'.join(parts[2:])  # e.g., "nova-lite-v1"
-            elif parts[1] == 'anthropic':
-                model = '.'.join(parts[2:])  # e.g., "claude-3-7-sonnet-20250219-v1"
-
-    # Handle provider.model format (e.g., "amazon.titan-text-lite-v1")
-    # Only apply this if the dot appears early in the string (likely a provider prefix)
-    # and not if it's part of a version number (like "claude-2.1")
-    if '.' in model and not model.startswith('gpt') and not model.startswith('text-'):
-        parts = model.split('.')
-        if len(parts) >= 2:
-            # Only treat as provider.model if the first part looks like a provider
-            # and the dot is not part of a version number at the end
-            first_part = parts[0]
-            # Check if first part is a known provider or looks like one (no hyphens, short)
-            known_providers = {'amazon', 'google', 'microsoft', 'anthropic', 'openai', 'meta', 'cohere'}
-            if (first_part in known_providers or
-                (len(first_part) <= 10 and '-' not in first_part and not first_part.isdigit())):
-                # Skip the provider part, keep the model part
-                model = '.'.join(parts[1:])
-
-    # Define version patterns that should be removed
-    version_patterns = [
-        r'^[0-9]+$',                    # Pure numbers: "4", "3", "2"
-        r'^[0-9]+[a-z]$',               # Number+letter: "4o", "3b", "2t"
-        r'^[0-9]+\.[0-9]+$',            # Semantic: "3.5", "2.1"
-        r'^[0-9]+\.[0-9]+\.[0-9]+$',    # Full semantic: "1.2.3"
-        r'^v[0-9]+$',                   # Version prefix: "v1", "v2"
-        r'^v[0-9]+\.[0-9]+$',           # Version semantic: "v1.0", "v2.1"
-        r'^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$',  # Date format: "2024.01.15"
-        r'^[0-9]{8}$',                  # Date format: "20240115", "20250219"
-        r'^[0-9]{6}$',                  # Short date: "240115"
-        r'^[0-9]+-[0-9]+-[0-9]+$',      # Hyphenated version: "3-7-sonnet" -> remove "3-7"
-    ]
-
-    # Version-related words that should be removed
-    version_words = {
-        'latest', 'stable', 'preview', 'beta', 'alpha',
-        'rc', 'release', 'final', 'dev', 'nightly',
-        'experimental', 'test', 'demo', 'trial', 'new',
-        'updated', 'improved', 'enhanced', 'plus', 'pro',
-        'hd', 'vision'  # Special modifiers that are versions, not model names
-    }
-
-    # Model variant words that should be PRESERVED (not considered versions)
-    model_variants = {
-        # Claude model variants
-        'haiku', 'sonnet', 'opus', 'instant',
-        # GPT model variants
-        'turbo', 'instruct', 'vision', 'mini',
-        # Common model variants
-        'chat', 'text', 'base', 'small', 'medium', 'large',
-        'xl', 'xxl', 'lite', 'light', 'fast', 'slow',
-        # Nova model types
-        'canvas', 'micro',
-        # Other model indicators
-        'embedding', 'ada', 'babbage', 'curie', 'davinci'
-    }
-
-    # Special handling for specific model families
-
-    # Command-R models - always return 'command-r'
-    if 'command' in model.lower() and 'r' in model.lower():
-        return 'command-r'
-
-    # Split model into parts
-    parts = model.lower().split('-')
-    if not parts:
-        return model.lower()
-
-    # Filter out version parts while preserving model variants
-    filtered_parts = []
-
-    for part in parts:
-        # Skip empty parts
-        if not part:
-            continue
-
-        # Check if part matches version patterns
-        is_version = False
-        for pattern in version_patterns:
-            if re.match(pattern, part):
-                is_version = True
-                break
-
-        # Skip if it's a version word (but not a model variant)
-        if part in version_words:
-            is_version = True
-
-        # Preserve model variants even if they might look like versions
-        if part in model_variants:
-            is_version = False
-
-        # Special case: preserve letter+number patterns (e.g., "o1", "m7")
-        # but remove number+letter patterns (e.g., "4o", "3b")
-        if re.match(r'^[a-z]+[0-9]+$', part):
-            is_version = False  # This is a model name like "o1"
-        elif re.match(r'^[0-9]+[a-z]+$', part):
-            is_version = True   # This is a version like "4o"
-
-        if not is_version:
-            filtered_parts.append(part)
-
-    # If we filtered everything out, fall back to the first part
-    if not filtered_parts:
-        filtered_parts = [parts[0]]
-
-    result = '-'.join(filtered_parts)
-
-    # Final cleanup - remove any trailing version-like suffixes
-    result = re.sub(r'-+(latest|stable|preview|final|v[0-9]+)$', '', result)
-
-    return result if result else original_model.lower()
+    if not model or model.strip() == '' or model == '*':
+        return 'unknown/unknown'
+    
+    model = model.strip()
+    
+    # If provider is specified and not already in the model string, prepend it
+    if provider and provider not in model and '/' not in model:
+        resource_id = f"{provider}/{model}"
+    else:
+        resource_id = model
+    
+    # Replace colons with pipes for CZRN compatibility
+    resource_id = resource_id.replace(':', '|')
+    
+    return resource_id
 
 
 def parse_date(date_value: Union[str, datetime, None]) -> Optional[datetime]:
@@ -376,6 +227,32 @@ def parse_date(date_value: Union[str, datetime, None]) -> Optional[datetime]:
             return None
 
 
+# Base field mappings (shared between user tables and logs)
+_BASE_CBF_MAPPINGS = {
+    'spend': 'cost/cost',
+    'prompt_tokens': 'usage/amount (partial)',
+    'completion_tokens': 'usage/amount (partial)',
+    'custom_llm_provider': 'resource/service (via normalize_service)',
+    'entity_type': 'resource/tag:entity_type',
+    'entity_id': 'resource/tag:entity_id',
+    'api_requests': 'resource/tag:api_requests',
+    'successful_requests': 'resource/tag:successful_requests',
+    'failed_requests': 'resource/tag:failed_requests',
+    'model_group': 'resource/tag:model_group',
+    # Enriched API key information
+    # Note: key_name is NOT a sensitive value - it's already truncated/masked in the source database
+    'key_name': 'resource/tag:key_name',
+    # Enriched user information
+    'user_alias': 'resource/tag:user_alias',
+    'user_email': 'resource/tag:user_email',
+    # Enriched team information
+    'team_alias': 'resource/tag:team_alias',
+    'team_id': 'resource/tag:team_id',
+    # Enriched organization information
+    'organization_alias': 'resource/tag:organization_alias',
+    'organization_id': 'resource/tag:organization_id',
+}
+
 # Mapping dictionaries for field analysis and documentation
 CZRN_FIELD_MAPPINGS = {
     'custom_llm_provider': 'service-type (via normalize_service)',
@@ -396,33 +273,13 @@ CZRN_CONSTANT_MAPPINGS = {
 CBF_FIELD_MAPPINGS = {
     # Standard CBF fields
     'date': 'time/usage_start (via parse_date)',
-    'spend': 'cost/cost',
-    'prompt_tokens': 'usage/amount (partial)',
-    'completion_tokens': 'usage/amount (partial)',
-    'custom_llm_provider': 'resource/service (via normalize_service)',
     'key_alias': 'resource/account (via normalize_component, preferred)',
     'api_key': 'resource/account (via normalize_component, fallback)',
     'model': 'resource/usage_family (via extract_model_name)',
-    # Resource tags - original fields (entity_id now used as resource tag since key_alias/api_key used for account)
-    'entity_type': 'resource/tag:entity_type',
-    'entity_id': 'resource/tag:entity_id',
-    'api_requests': 'resource/tag:api_requests',
-    'successful_requests': 'resource/tag:successful_requests',
-    'failed_requests': 'resource/tag:failed_requests',
-    'model_group': 'resource/tag:model_group',
     'cache_creation_input_tokens': 'resource/tag:cache_creation_tokens',
     'cache_read_input_tokens': 'resource/tag:cache_read_tokens',
-    # Resource tags - enriched API key information
-    'key_name': 'resource/tag:key_name',
-    # Resource tags - enriched user information
-    'user_alias': 'resource/tag:user_alias',
-    'user_email': 'resource/tag:user_email',
-    # Resource tags - enriched team information
-    'team_alias': 'resource/tag:team_alias',
-    'team_id': 'resource/tag:team_id',
-    # Resource tags - enriched organization information
-    'organization_alias': 'resource/tag:organization_alias',
-    'organization_id': 'resource/tag:organization_id',
+    # Include all base mappings
+    **_BASE_CBF_MAPPINGS,
     # Note: resource/id comes from cloud-local-id, usage/units='tokens' (constant), lineitem/type='Usage' (constant), resource/tag:czrn contains full CZRN
 }
 
@@ -447,30 +304,39 @@ SPENDLOGS_CZRN_FIELD_MAPPINGS = {
 SPENDLOGS_CBF_FIELD_MAPPINGS = {
     # Standard CBF fields
     'start_time': 'time/usage_start (via parse_date)',
-    'spend': 'cost/cost',
-    'prompt_tokens': 'usage/amount (partial)',
-    'completion_tokens': 'usage/amount (partial)',
-    'custom_llm_provider': 'resource/service (via normalize_service)',
     'key_alias': 'resource/account (via normalize_component, preferred)',
     'api_key': 'resource/account (via normalize_component, fallback)',
     'call_type': 'resource/usage_family (direct mapping)',  # KEY DIFFERENCE: use call_type instead of model
-    # Resource tags - SpendLogs-specific fields
+    # SpendLogs-specific fields
     'request_id': 'resource/tag:request_id',
-    'entity_type': 'resource/tag:entity_type',
-    'entity_id': 'resource/tag:entity_id',
     'model': 'resource/tag:model',  # Model becomes a tag in SpendLogs
-    'model_group': 'resource/tag:model_group',
-    'team_id': 'resource/tag:team_id',
     'end_user': 'resource/tag:end_user',
-    # Resource tags - enriched API key information
-    'key_name': 'resource/tag:key_name',
-    # Resource tags - enriched user information
-    'user_alias': 'resource/tag:user_alias',
-    'user_email': 'resource/tag:user_email',
-    # Resource tags - enriched team information
     'enriched_team_id': 'resource/tag:enriched_team_id',
-    'team_alias': 'resource/tag:team_alias',
-    # Resource tags - enriched organization information
-    'organization_alias': 'resource/tag:organization_alias',
-    'organization_id': 'resource/tag:organization_id',
+    # Include all base mappings
+    **_BASE_CBF_MAPPINGS,
 }
+
+
+def get_field_mappings(source: str = 'usertable') -> Dict[str, Dict[str, Any]]:
+    """Get field mappings based on data source.
+    
+    Args:
+        source: Data source type ('usertable' or 'logs')
+        
+    Returns:
+        Dictionary containing CZRN and CBF field mappings
+    """
+    if source == 'logs':
+        return {
+            'czrn': SPENDLOGS_CZRN_FIELD_MAPPINGS,
+            'cbf': SPENDLOGS_CBF_FIELD_MAPPINGS,
+            'czrn_constants': CZRN_CONSTANT_MAPPINGS,
+            'cbf_constants': CBF_CONSTANT_MAPPINGS
+        }
+    else:
+        return {
+            'czrn': CZRN_FIELD_MAPPINGS,
+            'cbf': CBF_FIELD_MAPPINGS,
+            'czrn_constants': CZRN_CONSTANT_MAPPINGS,
+            'cbf_constants': CBF_CONSTANT_MAPPINGS
+        }

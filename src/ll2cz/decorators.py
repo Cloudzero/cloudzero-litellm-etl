@@ -4,9 +4,9 @@
 """Decorators for CLI commands to reduce code duplication."""
 
 import functools
-from typing import Callable, Optional
+import sys
+from typing import Callable
 
-import typer
 from rich.console import Console
 
 from .config import Config
@@ -26,20 +26,20 @@ def requires_database(func: Callable) -> Callable:
     def wrapper(*args, **kwargs):
         config = Config()
         db_connection = kwargs.get('db_connection')
-        
+
         # Load from config if not provided via CLI
         db_connection = config.get_database_connection(db_connection)
-        
+
         if not db_connection:
             console.print("[red]Error: --input (database connection) is required[/red]")
             console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
             console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-            raise typer.Exit(1)
-            
+            sys.exit(1)
+
         # Update kwargs with resolved connection
         kwargs['db_connection'] = db_connection
         return func(*args, **kwargs)
-        
+
     return wrapper
 
 
@@ -54,32 +54,32 @@ def requires_cloudzero_auth(func: Callable) -> Callable:
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         config = Config()
-        
+
         # Get API key
         cz_api_key = kwargs.get('cz_api_key')
-        cz_api_key = config.get_cloudzero_api_key(cz_api_key)
-        
+        cz_api_key = config.get_cz_api_key(cz_api_key)
+
         if not cz_api_key:
             console.print("[red]Error: --cz-api-key (CloudZero API key) is required[/red]")
             console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
             console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-            raise typer.Exit(1)
-            
+            sys.exit(1)
+
         # Get connection ID
         cz_connection_id = kwargs.get('cz_connection_id')
-        cz_connection_id = config.get_cloudzero_connection_id(cz_connection_id)
-        
+        cz_connection_id = config.get_cz_connection_id(cz_connection_id)
+
         if not cz_connection_id:
             console.print("[red]Error: --cz-connection-id (CloudZero connection ID) is required[/red]")
             console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
             console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-            raise typer.Exit(1)
-            
+            sys.exit(1)
+
         # Update kwargs with resolved credentials
         kwargs['cz_api_key'] = cz_api_key
         kwargs['cz_connection_id'] = cz_connection_id
         return func(*args, **kwargs)
-        
+
     return wrapper
 
 
@@ -92,12 +92,9 @@ def handle_errors(func: Callable) -> Callable:
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except typer.Exit:
-            # Re-raise typer exits
-            raise
         except KeyboardInterrupt:
             console.print("\n[yellow]Operation cancelled by user[/yellow]")
-            raise typer.Exit(1)
+            sys.exit(1)
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
             # In debug mode, show full traceback
@@ -106,8 +103,8 @@ def handle_errors(func: Callable) -> Callable:
                 import traceback
                 console.print("[dim]Full traceback:[/dim]")
                 console.print(traceback.format_exc())
-            raise typer.Exit(1)
-            
+            sys.exit(1)
+
     return wrapper
 
 
@@ -121,7 +118,7 @@ def with_progress(message: str = "Processing...") -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             from rich.progress import Progress, SpinnerColumn, TextColumn
-            
+
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -136,6 +133,6 @@ def with_progress(message: str = "Processing...") -> Callable:
                 except Exception:
                     progress.stop()
                     raise
-                    
+
         return wrapper
     return decorator

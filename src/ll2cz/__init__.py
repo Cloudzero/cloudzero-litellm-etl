@@ -11,6 +11,4 @@ except importlib.metadata.PackageNotFoundError:
     # Fallback for development environment
     __version__ = "0.4.0"
 
-from .cli import app
-
-__all__ = ["app", "__version__"]
+__all__ = ["__version__"]

@@ -1,243 +1,121 @@
 # SPDX-FileCopyrightText: Copyright (c), CloudZero, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Command line interface for LiteLLM to CloudZero ETL tool."""
+"""Command line interface for LiteLLM to CloudZero ETL tool using argparse."""
 
+import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Optional
 
-import polars as pl
-import typer
 from rich.console import Console
 
 from . import __version__
 from .analysis import DataAnalyzer
 from .cached_database import CachedLiteLLMDatabase
 from .config import Config
-from .data_processor import DataProcessor
-from .data_source_strategy import DataSourceFactory
 from .database import LiteLLMDatabase
-from .date_utils import DateParser
-from .decorators import handle_errors, requires_cloudzero_auth, requires_database
-from .output import CloudZeroStreamer, CSVWriter
-from .transform import CBFTransformer
+from .output import CSVWriter
+from .cbf_transformer import CBFTransformer
+from .transmit import DataTransmitter
 
-app = typer.Typer(
-    name="litellm-cz-etl",
-    help="Transform LiteLLM database data into CloudZero AnyCost CBF format",
-    rich_markup_mode="rich"
-)
 console = Console()
 
 
-def version_callback(value: bool):
-    """Show version information."""
-    if value:
-        console.print(f"ll2cz version {__version__}")
-        raise typer.Exit()
+class CustomHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Custom help formatter that provides better formatting."""
+    def __init__(self, prog, indent_increment=2, max_help_position=30, width=None):
+        super().__init__(prog, indent_increment, max_help_position, width)
 
 
+def add_common_database_args(parser):
+    """Add common database connection arguments to a parser."""
+    parser.add_argument(
+        '--input',
+        dest='db_connection',
+        help='LiteLLM PostgreSQL database connection URL'
+    )
 
 
-config_app = typer.Typer(help="Configuration management commands")
+def add_cloudzero_auth_args(parser):
+    """Add CloudZero authentication arguments to a parser."""
+    parser.add_argument(
+        '--cz-api-key',
+        dest='cz_api_key',
+        help='CloudZero API key for data transmission'
+    )
+    parser.add_argument(
+        '--cz-connection-id',
+        dest='cz_connection_id',
+        help='CloudZero connection ID for this data source'
+    )
 
 
-@config_app.command("example")
-def config_example():
-    """Create an example configuration file at ~/.ll2cz/config.yml."""
+def handle_database_config(args):
+    """Handle database configuration loading."""
+    config = Config()
+    db_connection = config.get_database_connection(args.db_connection)
+
+    if not db_connection:
+        console.print("[red]Error: --input (database connection) is required[/red]")
+        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
+        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
+        sys.exit(1)
+
+    return db_connection
+
+
+def handle_cloudzero_auth(args):
+    """Handle CloudZero authentication configuration."""
+    config = Config()
+
+    cz_api_key = config.get_cz_api_key(args.cz_api_key)
+    if not cz_api_key:
+        console.print("[red]Error: --cz-api-key (CloudZero API key) is required[/red]")
+        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
+        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
+        sys.exit(1)
+
+    cz_connection_id = config.get_cz_connection_id(args.cz_connection_id)
+    if not cz_connection_id:
+        console.print("[red]Error: --cz-connection-id (CloudZero connection ID) is required[/red]")
+        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
+        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
+        sys.exit(1)
+
+    return cz_api_key, cz_connection_id
+
+
+# Config commands
+def config_example(args):
+    """Create an example configuration file."""
     config = Config()
     config.create_example_config()
 
 
-@config_app.command("status")
-def config_status():
-    """Show current configuration status."""
+def config_show(args):
+    """Show current configuration."""
     config = Config()
     config.show_config_status()
 
 
-@config_app.command("edit")
-def config_edit():
-    """Interactively edit configuration values."""
-    config = Config()
-    config.interactive_edit_config()
+# Analyze commands
+def analyze_data(args):
+    """Comprehensive analysis of LiteLLM data."""
+    db_connection = handle_database_config(args)
 
+    # Validate table option if show_raw is enabled
+    if args.show_raw and args.table not in ["all", "user", "team", "tag", "logs"]:
+        console.print("[red]Error: --table must be one of: all, user, team, tag, logs[/red]")
+        sys.exit(1)
 
-app.add_typer(config_app, name="config")
-
-
-@app.command()
-@handle_errors
-@requires_database
-def transform(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-    output_file: Annotated[Optional[str], typer.Option("--output", help="Output CSV file name")] = None,
-    screen: Annotated[bool, typer.Option("--screen", help="Display transformed data on screen in a formatted table")] = False,
-    limit: Annotated[int, typer.Option("--limit", help="Limit number of records to transform for screen output")] = 10000,
-) -> None:
-    """Transform LiteLLM database data into CloudZero AnyCost CBF format."""
-
-    database = LiteLLMDatabase(db_connection)
-
-    console.print("[blue]Loading data from LiteLLM database...[/blue]")
-    # Limit data if screen output is requested
-    data_limit = limit if screen else None
-    data = database.get_usage_data(limit=data_limit)
-
-    if data.is_empty():
-        console.print("[yellow]No data found in database[/yellow]")
-        return
-
-    console.print(f"[blue]Processing {len(data)} records...[/blue]")
-    transformer = CBFTransformer()
-    cbf_data = transformer.transform(data)
-
-    if screen:
-        _display_cbf_data_on_screen(cbf_data)
-
-    elif output_file:
-        writer = CSVWriter(output_file)
-        writer.write(cbf_data)
-        console.print(f"[green]Data written to {output_file}[/green]")
-
-    else:
-        console.print("[red]Error: Must specify either --screen or --output[/red]")
-        raise typer.Exit(1)
-
-
-@app.command()
-@handle_errors
-@requires_database
-@requires_cloudzero_auth
-def transmit(
-    mode: Annotated[str, typer.Argument(help="Transmission mode: 'day' for single day, 'month' for month, or 'all' for all data")],
-    date_spec: Annotated[Optional[str], typer.Argument(help="Date specification: DD-MM-YYYY for day mode, MM-YYYY for month mode, ignored for all mode")] = None,
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-    cz_api_key: Annotated[Optional[str], typer.Option("--cz-api-key", help="CloudZero API key")] = None,
-    cz_connection_id: Annotated[Optional[str], typer.Option("--cz-connection-id", help="CloudZero connection ID")] = None,
-    append: Annotated[bool, typer.Option("--append", help="Use 'sum' operation to append data instead of 'replace_hourly'")] = False,
-    timezone: Annotated[Optional[str], typer.Option("--timezone", help="Timezone for date handling (e.g., 'US/Eastern', 'UTC'). Defaults to UTC")] = None,
-    test: Annotated[bool, typer.Option("--test", help="Test mode: process only 5 records and show JSON payloads instead of transmitting (API keys still required)")] = False,
-    limit: Annotated[Optional[int], typer.Option("--limit", help="Limit number of records to process (default: all records)")] = None,
-    disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
-    source: Annotated[str, typer.Option("--source", help="Data source: 'usertable' (default) or 'logs' (SpendLogs table)")] = "usertable",
-) -> None:
-    """Transform LiteLLM data and transmit to CloudZero AnyCost API.
-
-    MODES:
-      day    - Send data for a specific day (default: today, or specify DD-MM-YYYY)
-      month  - Send data for a specific month (default: current month, or specify MM-YYYY)
-      all    - Send all available data (batched by day)
-
-    EXAMPLES:
-      ll2cz transmit day                    # Send today's data
-      ll2cz transmit day 15-01-2024         # Send data for January 15, 2024
-      ll2cz transmit month                  # Send current month's data
-      ll2cz transmit month 01-2024          # Send January 2024 data
-      ll2cz transmit all                    # Send all data in daily batches
-    """
-
-    # Validate parameters
-    if mode not in ['day', 'month', 'all']:
-        console.print("[red]Error: Mode must be 'day', 'month', or 'all'[/red]")
-        raise typer.Exit(1)
-
-    if source not in ['usertable', 'logs']:
-        console.print("[red]Error: --source must be 'usertable' or 'logs'[/red]")
-        raise typer.Exit(1)
-
-    # Set up timezone
-    user_timezone = timezone or 'UTC'
-
-    # Parse date specification and determine date range
-    try:
-        date_parser = DateParser(user_timezone)
-        date_filter = date_parser.parse_date_spec(mode, date_spec)
-    except ValueError as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    # Choose database implementation based on cache setting
-    if disable_cache:
-        database = LiteLLMDatabase(db_connection)
-        console.print("[dim]Cache disabled - using direct database connection[/dim]")
-    else:
-        database = CachedLiteLLMDatabase(db_connection)
-
-        # Display source information
-        source_desc = "SpendLogs table" if source == "logs" else "user tables"
-        console.print(f"[blue]Loading {mode} data from LiteLLM {source_desc}...[/blue]")
-        if date_filter:
-            console.print(f"[dim]Date filter: {date_filter.get('description', 'Unknown filter')}[/dim]")
-
-        # Use strategy pattern to load data
-        strategy = DataSourceFactory.create_strategy(source)
-
-        if test:
-            # In test mode, always load just 5 records
-            data = strategy.get_data(database, date_filter=None, limit=5)
-        else:
-            data = strategy.get_data(database, date_filter, limit)
-
-        if data.is_empty():
-            console.print("[yellow]No data found for the specified criteria[/yellow]")
-            return
-
-        console.print(f"[blue]Processing {len(data)} records...[/blue]")
-        processor = DataProcessor(source=source)
-        _, cbf_records, error_summary = processor.process_dataframe(data)
-
-        # Convert to DataFrame for compatibility with existing transmission logic
-        cbf_data = pl.DataFrame(cbf_records)
-
-        # Determine operation mode
-        operation = "sum" if append else "replace_hourly"
-
-        if test:
-            _display_enhanced_test_payloads(cbf_data, operation, mode)
-        else:
-            console.print(f"[blue]Transmitting to CloudZero AnyCost API using operation: '{operation}'[/blue]")
-            streamer = CloudZeroStreamer(cz_api_key, cz_connection_id, user_timezone)
-            streamer.send_batched(cbf_data, operation=operation)
-            console.print(f"[green]✓ Successfully transmitted {len(cbf_data)} records to CloudZero AnyCost API[/green]")
-
-
-analyze_app = typer.Typer(help="Analysis and data exploration commands")
-
-
-@analyze_app.command("data")
-@handle_errors
-@requires_database
-def analyze_data(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-    limit: Annotated[int, typer.Option("--limit", help="Number of records to analyze")] = 10000,
-    json_output: Annotated[Optional[str], typer.Option("--json", help="JSON output file for analysis results")] = None,
-    force_refresh: Annotated[bool, typer.Option("--force-refresh", help="Force refresh cache from server")] = False,
-    show_raw: Annotated[bool, typer.Option("--show-raw", help="Show raw data tables instead of analysis")] = False,
-    table: Annotated[Optional[str], typer.Option("--table", help="Show specific table only (for --show-raw): 'user', 'team', 'tag', or 'all'")] = "all",
-    csv_output: Annotated[bool, typer.Option("--csv", help="Export raw table data to CSV files (requires --show-raw)")] = False,
-    disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
-    disable_czrn: Annotated[bool, typer.Option("--disable-czrn", help="Disable CZRN generation analysis")] = False,
-    source: Annotated[str, typer.Option("--source", help="Data source: 'usertable' (default) or 'logs' (SpendLogs table)")] = "usertable",
-) -> None:
-    """Comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation."""
-
-    if show_raw and table not in ["all", "user", "team", "tag"]:
-        console.print("[red]Error: --table must be one of: all, user, team, tag[/red]")
-        raise typer.Exit(1)
-
-    if csv_output and not show_raw:
+    if args.csv and not args.show_raw:
         console.print("[red]Error: --csv requires --show-raw to be enabled[/red]")
-        raise typer.Exit(1)
-
-    if source not in ["usertable", "logs"]:
-        console.print("[red]Error: --source must be either 'usertable' or 'logs'[/red]")
-        raise typer.Exit(1)
+        sys.exit(1)
 
     # Choose database implementation based on cache setting
-    if disable_cache:
+    if args.disable_cache:
         database = LiteLLMDatabase(db_connection)
         console.print("[dim]Cache disabled - using direct database connection[/dim]")
     else:
@@ -245,50 +123,327 @@ def analyze_data(
         if database.is_offline_mode():
             console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
 
-    if show_raw:
-        # Show raw data tables (former show-data functionality)
-        if table == "all":
-            if csv_output:
-                console.print(f"[blue]Exporting {limit:,} records from each LiteLLM table to CSV files...[/blue]")
+    if args.show_raw:
+        # Show raw data tables
+        raw_limit = 100 if args.limit == 10000 else args.limit
+
+        if args.table == "all":
+            if args.csv:
+                console.print(f"[blue]Exporting {raw_limit:,} records from each LiteLLM table to CSV files...[/blue]")
             else:
-                console.print(f"[blue]Showing {limit:,} records from each LiteLLM table...[/blue]")
-            _show_all_tables_data_cached(database, limit, force_refresh, csv_output)
+                console.print(f"[blue]Showing {raw_limit:,} records from each LiteLLM table...[/blue]")
+            _show_all_tables_data_cached(database, raw_limit, args.csv)
         else:
-            if csv_output:
-                console.print(f"[blue]Exporting {limit:,} records from LiteLLM_{table.title()}Spend table to CSV file...[/blue]")
+            if args.csv:
+                console.print(f"[blue]Exporting {raw_limit:,} records from LiteLLM_{args.table.title()}Spend table to CSV file...[/blue]")
             else:
-                console.print(f"[blue]Showing {limit:,} records from LiteLLM_{table.title()}Spend table...[/blue]")
-            _show_single_table_data_cached(database, table, limit, force_refresh, csv_output)
+                console.print(f"[blue]Showing {raw_limit:,} records from LiteLLM_{args.table.title()}Spend table...[/blue]")
+            _show_single_table_data_cached(database, args.table, raw_limit, args.csv)
     else:
-        # Show comprehensive data analysis including CZRN generation
-        source_desc = "SpendLogs table" if source == "logs" else "user tables"
-        console.print(f"[blue]Running comprehensive analysis on {limit:,} records from {source_desc}...[/blue]")
+        # Show comprehensive data analysis
+        source_desc = "SpendLogs table" if args.source == "logs" else "user tables"
+        console.print(f"[blue]Running comprehensive analysis on {args.limit:,} records from {source_desc}...[/blue]")
         analyzer = DataAnalyzer(database)
-        results = analyzer.analyze(limit=limit, force_refresh=force_refresh, show_czrn_analysis=not disable_czrn, source=source)
+        results = analyzer.analyze(limit=args.limit, source=args.source, cbf_example_limit=args.records)
 
         console.print("\n[bold]Comprehensive Data Analysis:[/bold]")
         console.print("=" * 60)
-        analyzer.print_results(results, source)
+        analyzer.print_results(results, args.source)
 
-        if json_output:
-            json_path = Path(json_output)
+        if args.json:
+            json_path = Path(args.json)
             json_path.write_text(json.dumps(results, indent=2, default=str))
             console.print(f"[green]Analysis results saved to {json_path}[/green]")
 
 
+def analyze_spend(args):
+    """Analyze spending patterns."""
+    db_connection = handle_database_config(args)
+
+    # Choose database implementation
+    if args.disable_cache:
+        database = LiteLLMDatabase(db_connection)
+        console.print("[dim]Cache disabled - using direct database connection[/dim]")
+    else:
+        database = CachedLiteLLMDatabase(db_connection)
+        if database.is_offline_mode():
+            console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
+
+    console.print(f"[blue]Analyzing spending patterns for {args.limit:,} records...[/blue]")
+
+    try:
+        analyzer = DataAnalyzer(database)
+        analyzer.spend_analysis(limit=args.limit)
+    except Exception as e:
+        console.print(f"[red]Error during spend analysis: {e}[/red]")
+        sys.exit(1)
 
 
+def analyze_schema(args):
+    """Discover and document database schema."""
+    db_connection = handle_database_config(args)
+    database = LiteLLMDatabase(db_connection)
 
-def _show_all_tables_data_cached(database: CachedLiteLLMDatabase, limit: int, force_refresh: bool, csv_output: bool = False) -> None:
+    console.print("[blue]Discovering LiteLLM database schema...[/blue]")
+
+    try:
+        schema_info = database.discover_all_tables()
+
+        # Display summary
+        console.print("\n[bold]📊 Database Schema Summary[/bold]")
+        console.print(f"Found {schema_info['table_count']} LiteLLM tables")
+
+        # Display each table
+        for table_name, table_info in sorted(schema_info['tables'].items()):
+            console.print(f"\n[bold cyan]📋 {table_name}[/bold cyan]")
+            console.print(f"  Rows: {table_info['row_count']:,}")
+            console.print(f"  Columns: {len(table_info['columns'])}")
+
+            if table_info['primary_keys']:
+                console.print(f"  Primary Keys: {', '.join(table_info['primary_keys'])}")
+
+        # Save to file if requested
+        if args.output:
+            output_path = Path(args.output)
+            with output_path.open('w') as f:
+                f.write("# LiteLLM Database Schema\n\n")
+                f.write(f"Generated: {datetime.now().isoformat()}\n\n")
+                f.write("## Summary\n")
+                f.write(f"- Total Tables: {schema_info['table_count']}\n")
+                f.write(f"- Tables: {', '.join(sorted(schema_info['table_names']))}\n\n")
+
+                for table_name, table_info in sorted(schema_info['tables'].items()):
+                    f.write(f"## {table_name}\n\n")
+                    f.write(f"- **Row Count**: {table_info['row_count']:,}\n")
+                    f.write(f"- **Primary Keys**: {', '.join(table_info['primary_keys']) or 'None'}\n\n")
+
+                    f.write("### Columns\n\n")
+                    f.write("| Column | Type | Nullable | Default |\n")
+                    f.write("|--------|------|----------|----------|\n")
+
+                    for col in table_info['columns']:
+                        nullable = "Yes" if col['is_nullable'] == 'YES' else "No"
+                        default = col['column_default'] or '-'
+                        f.write(f"| {col['column_name']} | {col['data_type']} | {nullable} | {default} |\n")
+
+                    if table_info['foreign_keys']:
+                        f.write("\n### Foreign Keys\n\n")
+                        for fk in table_info['foreign_keys']:
+                            f.write(f"- {fk['column_name']} → {fk['foreign_table_name']}.{fk['foreign_column_name']}\n")
+
+                    if table_info['indexes']:
+                        f.write("\n### Indexes\n\n")
+                        for idx in table_info['indexes']:
+                            unique = " (unique)" if idx['is_unique'] else ""
+                            f.write(f"- {idx['index_name']}{unique}: {', '.join(idx['column_names'])}\n")
+
+                    f.write("\n")
+
+            console.print(f"[green]Schema documentation saved to {output_path}[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+# Transform command
+def transform(args):
+    """Transform LiteLLM data to CloudZero CBF format."""
+    db_connection = handle_database_config(args)
+
+    # Choose database implementation
+    if args.disable_cache:
+        database = LiteLLMDatabase(db_connection)
+        console.print("[dim]Cache disabled - using direct database connection[/dim]")
+    else:
+        database = CachedLiteLLMDatabase(db_connection)
+        if database.is_offline_mode():
+            console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
+
+    source_desc = "SpendLogs table" if args.source == "logs" else "user tables"
+    console.print(f"[blue]Transforming {args.limit:,} records from {source_desc} to CBF format...[/blue]")
+
+    try:
+        transformer = CBFTransformer(database, timezone=args.timezone)
+        cbf_data, summary = transformer.transform(
+            limit=args.limit,
+            source=args.source
+        )
+
+        # Display summary
+        console.print(f"\n[green]✓ Transformed {summary['records_transformed']:,} records[/green]")
+        console.print(f"[blue]Date range: {summary['date_range']['min']} to {summary['date_range']['max']}[/blue]")
+        console.print(f"[blue]Total spend: ${summary['total_spend']:,.2f}[/blue]")
+        console.print(f"[blue]Total tokens: {summary['total_tokens']:,}[/blue]")
+
+        # Save output
+        output_path = Path(args.output)
+
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if args.format == 'csv':
+            writer = CSVWriter()
+            writer.write_cbf_records(cbf_data, output_path)
+            console.print(f"[green]CBF data written to {output_path} (CSV format)[/green]")
+        else:  # jsonl
+            with output_path.open('w') as f:
+                for record in cbf_data:
+                    f.write(json.dumps(record, default=str) + '\n')
+            console.print(f"[green]CBF data written to {output_path} (JSONL format)[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+# Transmit command
+def transmit(args):
+    """Transmit data to CloudZero."""
+    db_connection = handle_database_config(args)
+    cz_api_key, cz_connection_id = handle_cloudzero_auth(args)
+
+    # Choose database implementation
+    if args.disable_cache:
+        database = LiteLLMDatabase(db_connection)
+        console.print("[dim]Cache disabled - using direct database connection[/dim]")
+    else:
+        database = CachedLiteLLMDatabase(db_connection)
+        if database.is_offline_mode():
+            console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
+
+    try:
+        transmitter = DataTransmitter(
+            database=database,
+            cz_api_key=cz_api_key,
+            cz_connection_id=cz_connection_id,
+            timezone=args.timezone or 'UTC'
+        )
+
+        transmitter.transmit(
+            mode=args.mode,
+            date_spec=args.date,
+            source=args.source,
+            append=args.append,
+            test=args.test,
+            limit=args.records
+        )
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+# Cache commands
+def cache_status(args):
+    """Show cache status."""
+    db_connection = handle_database_config(args)
+
+    try:
+        database = CachedLiteLLMDatabase(db_connection)
+
+        if args.remote_check:
+            console.print("[blue]Checking cache status with remote server verification...[/blue]")
+
+            # Test server connectivity
+            if database.database:
+                try:
+                    conn = database.database.connect()
+                    conn.close()
+                    server_status = "[green]✓ Online[/green]"
+                except Exception as e:
+                    server_status = f"[red]✗ Offline ({str(e)})[/red]"
+            else:
+                server_status = "[red]✗ No connection configured[/red]"
+
+            console.print("\n[bold]🌐 Server Status[/bold]")
+            console.print(f"  Status: {server_status}")
+            console.print(f"  Connection: {db_connection[:50]}..." if len(db_connection) > 50 else f"  Connection: {db_connection}")
+
+            # Get table info if online
+            if database.database:
+                try:
+                    table_info = database.get_table_info()
+                    console.print("\n[bold]📊 Remote Database[/bold]")
+                    console.print(f"  Total rows: {table_info['row_count']:,}")
+                    console.print(f"  Columns: {len(table_info['columns'])}")
+
+                    breakdown = table_info['table_breakdown']
+                    console.print("\n[bold]📋 Table Breakdown[/bold]")
+                    console.print(f"  User spend: {breakdown.get('user_spend', 0):,}")
+                    console.print(f"  Team spend: {breakdown.get('team_spend', 0):,}")
+                    console.print(f"  Tag spend: {breakdown.get('tag_spend', 0):,}")
+                except Exception:
+                    pass
+        else:
+            console.print("[blue]📦 Cache Status (Local Only)[/blue]")
+
+        # Get cache status
+        cache_status = database.get_cache_status()
+
+        console.print(f"  Cache file: {cache_status.get('cache_file', 'Unknown')}")
+        console.print(f"  Records cached: {cache_status.get('record_count', 0):,}")
+        console.print(f"  Server available: {'Yes' if cache_status.get('server_available') else 'No'}")
+        console.print(f"  Operating mode: {'Online' if cache_status.get('server_available') else 'Offline'}")
+
+        if cache_status.get('last_update'):
+            console.print(f"  Last updated: {cache_status['last_update']}")
+
+        # Show breakdown
+        breakdown = cache_status.get('breakdown', {})
+        if breakdown:
+            console.print("\n[bold]📊 Cache Breakdown[/bold]")
+            console.print(f"  User records: {breakdown.get('user', 0):,}")
+            console.print(f"  Team records: {breakdown.get('team', 0):,}")
+            console.print(f"  Tag records: {breakdown.get('tag', 0):,}")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+def cache_clear(args):
+    """Clear the cache."""
+    db_connection = handle_database_config(args)
+
+    try:
+        database = CachedLiteLLMDatabase(db_connection)
+        database.clear_cache()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+def cache_refresh(args):
+    """Refresh the cache."""
+    db_connection = handle_database_config(args)
+
+    try:
+        database = CachedLiteLLMDatabase(db_connection)
+
+        console.print("[blue]Refreshing cache from server...[/blue]")
+        database.refresh_cache()
+        console.print("[green]✓ Cache refreshed successfully[/green]")
+
+        # Show updated status
+        cache_status = database.get_cache_status()
+        console.print("\n[bold]Updated Cache Status[/bold]")
+        console.print(f"  Records cached: {cache_status.get('record_count', 0):,}")
+
+        breakdown = cache_status.get('breakdown', {})
+        if breakdown:
+            console.print(f"  User records: {breakdown.get('user', 0):,}")
+            console.print(f"  Team records: {breakdown.get('team', 0):,}")
+            console.print(f"  Tag records: {breakdown.get('tag', 0):,}")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+# Helper functions (from original cli.py)
+def _show_all_tables_data_cached(database, limit, csv_output=False):
     """Show data from all three LiteLLM tables individually using cache."""
-
-    # If force refresh, make sure we refresh the cache first
-    if force_refresh:
-        try:
-            _ = database.get_usage_data(limit=1, force_refresh=True)
-        except Exception:
-            pass  # Ignore errors during refresh, will show cached data
-
     # Show table breakdown first (unless in CSV mode)
     table_info = database.get_table_info()
     breakdown = table_info['table_breakdown']
@@ -303,34 +458,35 @@ def _show_all_tables_data_cached(database: CachedLiteLLMDatabase, limit: int, fo
     tables_to_show = [
         ("user", "LiteLLM_DailyUserSpend", "👤"),
         ("team", "LiteLLM_DailyTeamSpend", "👥"),
-        ("tag", "LiteLLM_DailyTagSpend", "🏷️")
+        ("tag", "LiteLLM_DailyTagSpend", "🏷️"),
+        ("logs", "LiteLLM_SpendLogs", "📊")
     ]
 
     for table_type, table_name, emoji in tables_to_show:
-        if breakdown[f'{table_type}_spend'] > 0:
-            if not csv_output:
-                console.print(f"\n[bold green]{emoji} {table_name}[/bold green]")
-            _show_single_table_data_cached(database, table_type, limit, force_refresh, csv_output)
-        else:
-            if not csv_output:
-                console.print(f"\n[bold yellow]{emoji} {table_name}[/bold yellow]")
-                console.print(f"[dim]No records found in {table_name}[/dim]")
+        # For --show-raw, always try to query the table regardless of breakdown count
+        if not csv_output:
+            console.print(f"\n[bold green]{emoji} {table_name}[/bold green]")
+        _show_single_table_data_cached(database, table_type, limit, csv_output)
 
 
-def _show_single_table_data_cached(database: CachedLiteLLMDatabase, table_type: str, limit: int, force_refresh: bool, csv_output: bool = False) -> None:
+def _show_single_table_data_cached(database, table_type, limit, csv_output=False):
     """Show data from a specific LiteLLM table using cache or export to CSV."""
     from pathlib import Path
 
     from rich.box import SIMPLE
     from rich.table import Table
 
-    table_name = f"LiteLLM_Daily{table_type.title()}Spend"
+    # Handle special case for logs table name
+    if table_type == "logs":
+        table_name = "LiteLLM_SpendLogs"
+    else:
+        table_name = f"LiteLLM_Daily{table_type.title()}Spend"
 
     if not csv_output:
         console.print(f"\n[bold green]📋 Raw Data from {table_name}[/bold green]")
 
     # Get data from cache filtered by entity type
-    data = database.get_individual_table_data(table_type, limit=limit, force_refresh=force_refresh)
+    data = database.get_individual_table_data(table_type, limit=limit)
 
     if not data.is_empty():
         if csv_output:
@@ -343,13 +499,30 @@ def _show_single_table_data_cached(database: CachedLiteLLMDatabase, table_type: 
             # Show table in console
             table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
 
-            # Add columns dynamically based on data
-            for col in data.columns:
-                table.add_column(col, style="white", no_wrap=False)
+            # For SpendLogs, show only key columns due to large number of fields
+            if table_type == "logs":
+                key_columns = [
+                    'request_id', 'startTime', 'user', 'api_key', 'model',
+                    'custom_llm_provider', 'total_tokens', 'spend', 'team_id'
+                ]
+                # Filter to only columns that exist in the data
+                columns_to_show = [col for col in key_columns if col in data.columns]
 
-            # Add rows
-            for row in data.to_dicts():
-                table.add_row(*[str(row.get(col, '')) for col in data.columns])
+                # Add columns
+                for col in columns_to_show:
+                    table.add_column(col, style="white", no_wrap=True if col == 'request_id' else False)
+
+                # Add rows with selected columns
+                for row in data.to_dicts():
+                    table.add_row(*[str(row.get(col, ''))[:50] if col == 'request_id' else str(row.get(col, '')) for col in columns_to_show])
+            else:
+                # Add columns dynamically based on data
+                for col in data.columns:
+                    table.add_column(col, style="white", no_wrap=False)
+
+                # Add rows
+                for row in data.to_dicts():
+                    table.add_row(*[str(row.get(col, '')) for col in data.columns])
 
             console.print(table)
             console.print(f"[dim]💡 Showing {len(data):,} records from {table_name}[/dim]")
@@ -358,584 +531,301 @@ def _show_single_table_data_cached(database: CachedLiteLLMDatabase, table_type: 
             console.print(f"[yellow]No data found in {table_name}[/yellow]")
 
 
-cache_app = typer.Typer(help="Cache management commands")
+def create_parser():
+    """Create the argument parser."""
+    parser = argparse.ArgumentParser(
+        prog='ll2cz',
+        description='Transform LiteLLM database data into CloudZero AnyCost CBF format',
+        formatter_class=CustomHelpFormatter
+    )
+
+    # Global options
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'%(prog)s {__version__}'
+    )
+
+    # Create subparsers
+    subparsers = parser.add_subparsers(
+        title='commands',
+        dest='command',
+        help='Available commands',
+        required=True
+    )
+
+    # Config commands
+    config_parser = subparsers.add_parser(
+        'config',
+        help='Configuration management commands',
+        formatter_class=CustomHelpFormatter
+    )
+    config_subparsers = config_parser.add_subparsers(
+        title='config commands',
+        dest='config_command',
+        required=True
+    )
+
+    config_example_parser = config_subparsers.add_parser(
+        'example',
+        help='Create an example configuration file at ~/.ll2cz/config.yml'
+    )
+    config_example_parser.set_defaults(func=config_example)
+
+    config_show_parser = config_subparsers.add_parser(
+        'show',
+        help='Show current configuration with redacted sensitive values'
+    )
+    config_show_parser.set_defaults(func=config_show)
+
+    # Analyze commands
+    analyze_parser = subparsers.add_parser(
+        'analyze',
+        help='Analysis and data exploration commands',
+        formatter_class=CustomHelpFormatter
+    )
+    analyze_subparsers = analyze_parser.add_subparsers(
+        title='analyze commands',
+        dest='analyze_command',
+        required=True
+    )
+
+    # analyze data
+    analyze_data_parser = analyze_subparsers.add_parser(
+        'data',
+        help='Comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation'
+    )
+    add_common_database_args(analyze_data_parser)
+    analyze_data_parser.add_argument(
+        '--limit',
+        type=int,
+        default=10000,
+        help='Number of records to analyze (default: 10000)'
+    )
+    analyze_data_parser.add_argument(
+        '--json',
+        help='JSON output file for analysis results'
+    )
+    analyze_data_parser.add_argument(
+        '--show-raw',
+        action='store_true',
+        help='Show raw data tables instead of analysis'
+    )
+    analyze_data_parser.add_argument(
+        '--table',
+        default='all',
+        choices=['all', 'user', 'team', 'tag', 'logs'],
+        help="Show specific table only (for --show-raw): 'user', 'team', 'tag', 'logs', or 'all'"
+    )
+    analyze_data_parser.add_argument(
+        '--csv',
+        action='store_true',
+        help='Export raw table data to CSV files (requires --show-raw)'
+    )
+    analyze_data_parser.add_argument(
+        '--disable-cache',
+        action='store_true',
+        help='Disable cache and fetch data directly from database'
+    )
+    analyze_data_parser.add_argument(
+        '--source',
+        default='usertable',
+        choices=['usertable', 'logs'],
+        help="Data source: 'usertable' (default) or 'logs' (SpendLogs table)"
+    )
+    analyze_data_parser.add_argument(
+        '--records',
+        type=int,
+        default=5,
+        help='Number of CBF transformation examples to show (default: 5)'
+    )
+    analyze_data_parser.set_defaults(func=analyze_data)
+
+    # analyze spend
+    analyze_spend_parser = analyze_subparsers.add_parser(
+        'spend',
+        help='Analyze spending patterns based on LiteLLM team and user data'
+    )
+    add_common_database_args(analyze_spend_parser)
+    analyze_spend_parser.add_argument(
+        '--limit',
+        type=int,
+        default=10000,
+        help='Number of records to analyze for spend analysis (default: 10000)'
+    )
+    analyze_spend_parser.add_argument(
+        '--disable-cache',
+        action='store_true',
+        help='Disable cache and fetch data directly from database'
+    )
+    analyze_spend_parser.set_defaults(func=analyze_spend)
+
+    # analyze schema
+    analyze_schema_parser = analyze_subparsers.add_parser(
+        'schema',
+        help='Discover and document all tables in the LiteLLM database'
+    )
+    add_common_database_args(analyze_schema_parser)
+    analyze_schema_parser.add_argument(
+        '--output',
+        help='Output file for schema documentation (Markdown format)'
+    )
+    analyze_schema_parser.set_defaults(func=analyze_schema)
+
+    # Transform command
+    transform_parser = subparsers.add_parser(
+        'transform',
+        help='Transform LiteLLM data to CloudZero AnyCost CBF format'
+    )
+    add_common_database_args(transform_parser)
+    transform_parser.add_argument(
+        '--output',
+        default='cbf_output.jsonl',
+        help='Output file path (default: cbf_output.jsonl)'
+    )
+    transform_parser.add_argument(
+        '--format',
+        choices=['jsonl', 'csv'],
+        default='jsonl',
+        help='Output format (default: jsonl)'
+    )
+    transform_parser.add_argument(
+        '--limit',
+        type=int,
+        default=10000,
+        help='Number of records to transform (default: 10000)'
+    )
+    transform_parser.add_argument(
+        '--timezone',
+        default='UTC',
+        help='Timezone for date conversions (default: UTC)'
+    )
+    transform_parser.add_argument(
+        '--disable-cache',
+        action='store_true',
+        help='Disable cache and fetch data directly from database'
+    )
+    transform_parser.add_argument(
+        '--source',
+        default='usertable',
+        choices=['usertable', 'logs'],
+        help="Data source: 'usertable' (default) or 'logs' (SpendLogs table)"
+    )
+    transform_parser.set_defaults(func=transform)
+
+    # Transmit command
+    transmit_parser = subparsers.add_parser(
+        'transmit',
+        help='Transmit transformed data to CloudZero'
+    )
+    add_common_database_args(transmit_parser)
+    add_cloudzero_auth_args(transmit_parser)
+    transmit_parser.add_argument(
+        '--mode',
+        choices=['today', 'yesterday', 'date-range', 'all'],
+        default='yesterday',
+        help='Transmission mode (default: yesterday)'
+    )
+    transmit_parser.add_argument(
+        '--date',
+        help='Date specification (YYYY-MM-DD for single date, or YYYY-MM-DD:YYYY-MM-DD for range)'
+    )
+    transmit_parser.add_argument(
+        '--source',
+        default='usertable',
+        choices=['usertable', 'logs'],
+        help="Data source: 'usertable' (default) or 'logs' (SpendLogs table)"
+    )
+    transmit_parser.add_argument(
+        '--append',
+        action='store_true',
+        help='Append data to existing records in CloudZero'
+    )
+    transmit_parser.add_argument(
+        '--test',
+        action='store_true',
+        help='Test mode - show what would be sent without transmitting'
+    )
+    transmit_parser.add_argument(
+        '--records',
+        type=int,
+        help='Number of records to send or show (if using --test)'
+    )
+    transmit_parser.add_argument(
+        '--timezone',
+        help='Timezone for date operations (e.g., America/New_York)'
+    )
+    transmit_parser.add_argument(
+        '--disable-cache',
+        action='store_true',
+        help='Disable cache and fetch data directly from database'
+    )
+    transmit_parser.set_defaults(func=transmit)
+
+    # Cache commands
+    cache_parser = subparsers.add_parser(
+        'cache',
+        help='Cache management commands',
+        formatter_class=CustomHelpFormatter
+    )
+    cache_subparsers = cache_parser.add_subparsers(
+        title='cache commands',
+        dest='cache_command',
+        required=True
+    )
+
+    # cache status
+    cache_status_parser = cache_subparsers.add_parser(
+        'status',
+        help='Show cache status and information'
+    )
+    add_common_database_args(cache_status_parser)
+    cache_status_parser.add_argument(
+        '--remote-check',
+        action='store_true',
+        help='Perform remote server checks and show detailed server status'
+    )
+    cache_status_parser.set_defaults(func=cache_status)
+
+    # cache clear
+    cache_clear_parser = cache_subparsers.add_parser(
+        'clear',
+        help='Clear the local cache'
+    )
+    add_common_database_args(cache_clear_parser)
+    cache_clear_parser.set_defaults(func=cache_clear)
+
+    # cache refresh
+    cache_refresh_parser = cache_subparsers.add_parser(
+        'refresh',
+        help='Force refresh the cache from server'
+    )
+    add_common_database_args(cache_refresh_parser)
+    cache_refresh_parser.set_defaults(func=cache_refresh)
+
+    return parser
 
 
-@cache_app.command("status")
-def cache_status(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-    remote_check: Annotated[bool, typer.Option("--remote-check", help="Perform remote server checks and show detailed server status")] = False,
-) -> None:
-    """Show cache status and information."""
-
-    # Load configuration
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
+def main():
+    """Main entry point."""
+    parser = create_parser()
+    args = parser.parse_args()
 
     try:
-        if not remote_check:
-            # Fast mode: local cache only, no remote server connection attempts
-            from .cache import DataCache
-            cache = DataCache()
-            cache_info = cache.get_cache_info(db_connection)
-
-            # Determine server availability from cache metadata without testing connection
-            server_available = cache_info.get('server_stats', {}).get('server_available', True)
-            if 'server_stats' not in cache_info:
-                # Fallback: assume available if we have cached data
-                server_available = cache_info.get('record_count', 0) > 0
-
-            cache_info['server_available'] = server_available
-        else:
-            # Remote check mode: contact server and get detailed status
-            console.print("[dim]Performing remote server checks...[/dim]")
-            database = CachedLiteLLMDatabase(db_connection)
-            cache_info = database.get_cache_status()
-
-            # Get additional remote details
-            if database.database is not None:
-                try:
-                    # Get fresh server info
-                    server_table_info = database.database.get_table_info()
-                    cache_info['server_table_info'] = server_table_info
-
-                    # Check cache freshness
-                    from .cache import DataCache
-                    cache = DataCache()
-                    server_stats = cache._check_server_freshness(database.database)
-                    cache_info['server_freshness'] = server_stats
-
-                except Exception as e:
-                    cache_info['server_error'] = str(e)
-
-        console.print(f"\n[bold blue]📦 Cache Status{' (Local Only)' if not remote_check else ' (With Remote Check)'}[/bold blue]")
-        console.print(f"  Cache file: {cache_info.get('cache_file', 'Unknown')}")
-        console.print(f"  Records cached: {cache_info.get('record_count', 0):,}")
-        console.print(f"  Server available: {'Yes' if cache_info.get('server_available') else 'No'}")
-        console.print(f"  Operating mode: {'Online' if cache_info.get('server_available') else 'Offline'}")
-
-        if cache_info.get('last_update'):
-            console.print(f"  Last updated: {cache_info.get('last_update')}")
-
-        # Show remote check details if available
-        if remote_check and cache_info.get('server_freshness'):
-            freshness = cache_info['server_freshness']
-            if freshness.get('server_available', True):
-                console.print("\n[bold green]🌐 Remote Server Status[/bold green]")
-                console.print("  Connection: Active")
-                console.print(f"  Check time: {freshness.get('check_time', 'Unknown')}")
-
-                if 'total_records' in freshness:
-                    console.print(f"  Server records: {freshness['total_records']:,}")
-
-                # Show table breakdown comparison
-                if 'table_breakdown' in freshness:
-                    server_breakdown = freshness['table_breakdown']
-                    console.print(f"  Server breakdown: User: {server_breakdown.get('user_spend', 0):,}, Team: {server_breakdown.get('team_spend', 0):,}, Tag: {server_breakdown.get('tag_spend', 0):,}")
-
-                # Show latest timestamps
-                if 'latest_timestamps' in freshness:
-                    timestamps = freshness['latest_timestamps']
-                    console.print("  Latest data:")
-                    for table_type, timestamp in timestamps.items():
-                        if timestamp:
-                            # Format timestamp nicely
-                            try:
-                                from datetime import datetime
-                                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                                formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
-                                console.print(f"    {table_type.title()}: {formatted_time}")
-                            except Exception:
-                                console.print(f"    {table_type.title()}: {timestamp}")
-                        else:
-                            console.print(f"    {table_type.title()}: No data")
-
-                # Show cache freshness status
-                cache_fresh = cache._is_cache_fresh(db_connection, freshness)
-                freshness_status = "Fresh" if cache_fresh else "Stale"
-                freshness_color = "green" if cache_fresh else "yellow"
-                console.print(f"  Cache status: [{freshness_color}]{freshness_status}[/{freshness_color}]")
-            else:
-                console.print("\n[bold red]🌐 Remote Server Status[/bold red]")
-                console.print("  Connection: Failed")
-                console.print(f"  Error: {freshness.get('error', 'Unknown error')}")
-        elif remote_check and cache_info.get('server_error'):
-            console.print("\n[bold red]🌐 Remote Server Status[/bold red]")
-            console.print("  Connection: Failed")
-            console.print(f"  Error: {cache_info['server_error']}")
-
-        breakdown = cache_info.get('breakdown', {})
-        if breakdown:
-            console.print("\n[bold cyan]📊 Cache Breakdown[/bold cyan]")
-            console.print(f"  User records: {breakdown.get('user', 0):,}")
-            console.print(f"  Team records: {breakdown.get('team', 0):,}")
-            console.print(f"  Tag records: {breakdown.get('tag', 0):,}")
-
+        # Call the appropriate function
+        args.func(args)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Operation cancelled by user[/yellow]")
+        sys.exit(1)
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-
-@cache_app.command("clear")
-def cache_clear(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-) -> None:
-    """Clear the local cache."""
-
-    # Load configuration
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
-    try:
-        database = CachedLiteLLMDatabase(db_connection)
-        database.clear_cache()
-        console.print("[green]✓ Cache cleared successfully[/green]")
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-
-@cache_app.command("refresh")
-def cache_refresh(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-) -> None:
-    """Force refresh the cache from server."""
-
-    # Load configuration
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
-    try:
-        database = CachedLiteLLMDatabase(db_connection)
-
-        if database.is_offline_mode():
-            console.print("[red]Error: Cannot refresh cache - server is not available[/red]")
-            raise typer.Exit(1)
-
-        database.refresh_cache()
-        console.print("[green]✓ Cache refreshed successfully[/green]")
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-
-app.add_typer(cache_app, name="cache")
-
-
-@analyze_app.command("spend")
-def analyze_spend(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-    limit: Annotated[int, typer.Option("--limit", help="Number of records to analyze for spend analysis")] = 10000,
-    force_refresh: Annotated[bool, typer.Option("--force-refresh", help="Force refresh cache from server")] = False,
-    disable_cache: Annotated[bool, typer.Option("--disable-cache", help="Disable cache and fetch data directly from database")] = False,
-) -> None:
-    """Analyze spending patterns based on LiteLLM team and user data."""
-
-    # Load configuration
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
-    try:
-        # Choose database implementation based on cache setting
-        if disable_cache:
-            database = LiteLLMDatabase(db_connection)
-            console.print("[dim]Cache disabled - using direct database connection[/dim]")
-        else:
-            database = CachedLiteLLMDatabase(db_connection)
-            if database.is_offline_mode():
-                console.print("[yellow]⚠️  Operating in offline mode - using cached data[/yellow]")
-
-        console.print(f"[blue]Running spend analysis on {limit:,} records...[/blue]")
-        analyzer = DataAnalyzer(database)
-        analyzer.spend_analysis(limit=limit, force_refresh=force_refresh)
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-
-@analyze_app.command("schema")
-def analyze_schema(
-    db_connection: Annotated[Optional[str], typer.Option("--input", help="LiteLLM PostgreSQL database connection URL")] = None,
-    output_file: Annotated[Optional[str], typer.Option("--output", help="Output file for schema documentation")] = None,
-) -> None:
-    """Discover and document all tables in the LiteLLM database."""
-
-    # Load configuration
-    config = Config()
-    db_connection = config.get_database_connection(db_connection)
-
-    if not db_connection:
-        console.print("[red]Error: --input (database connection) is required[/red]")
-        console.print("[blue]You can set it via CLI argument or in ~/.ll2cz/config.yml[/blue]")
-        console.print("[blue]Run 'll2cz config-example' to create a sample config file[/blue]")
-        raise typer.Exit(1)
-
-    try:
-        database = LiteLLMDatabase(db_connection)
-
-        console.print("[blue]Discovering all LiteLLM tables in database...[/blue]")
-        schema_info = database.discover_all_tables()
-
-        # Display summary
-        console.print("\n[bold green]📋 Database Schema Discovery Complete[/bold green]")
-        console.print(f"  Total LiteLLM tables found: {schema_info['table_count']}")
-
-        # Display table overview
-        _display_schema_overview(schema_info)
-
-        # Generate documentation if requested
-        if output_file:
-            _generate_complete_schema_docs(schema_info, output_file)
-            console.print(f"\n[green]📄 Complete schema documentation saved to {output_file}[/green]")
-        else:
-            console.print("\n[dim]💡 Use --output filename.md to save complete documentation[/dim]")
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-
-app.add_typer(analyze_app, name="analyze")
-
-
-def _display_schema_overview(schema_info: dict) -> None:
-    """Display a summary overview of discovered tables."""
-    from rich.box import SIMPLE
-    from rich.table import Table
-
-    console.print("\n[bold cyan]📊 Table Overview[/bold cyan]")
-
-    table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
-    table.add_column("Table Name", style="green", no_wrap=False)
-    table.add_column("Columns", style="blue", justify="right", no_wrap=False)
-    table.add_column("Row Count", style="yellow", justify="right", no_wrap=False)
-    table.add_column("Primary Keys", style="magenta", no_wrap=False)
-    table.add_column("Foreign Keys", style="red", justify="right", no_wrap=False)
-    table.add_column("Indexes", style="cyan", justify="right", no_wrap=False)
-
-    for table_name, table_info in schema_info['tables'].items():
-        fk_count = len(table_info['foreign_keys'])
-        idx_count = len(table_info['indexes'])
-        col_count = len(table_info['columns'])
-
-        pk_display = ', '.join(table_info['primary_keys']) if table_info['primary_keys'] else 'None'
-
-        table.add_row(
-            table_name,
-            str(col_count),
-            f"{table_info['row_count']:,}",
-            pk_display,
-            str(fk_count),
-            str(idx_count)
-        )
-
-    console.print(table)
-
-
-def _generate_complete_schema_docs(schema_info: dict, output_file: str) -> None:
-    """Generate complete schema documentation file."""
-    from pathlib import Path
-
-    # Create comprehensive documentation
-    doc_content = _create_complete_documentation(schema_info)
-
-    # Write to file
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(doc_content)
-
-
-def _display_cbf_data_on_screen(cbf_data: pl.DataFrame) -> None:
-    """Display CBF transformed data in a nicely formatted table on screen."""
-    if cbf_data.is_empty():
-        console.print("[yellow]No CBF data to display[/yellow]")
-        return
-
-    console.print(f"\n[bold green]💰 CloudZero CBF Transformed Data ({len(cbf_data)} records)[/bold green]")
-
-    # Convert to dicts for easier processing
-    records = cbf_data.to_dicts()
-
-    # Create main CBF table
-    from rich.box import SIMPLE
-    from rich.table import Table
-
-    cbf_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
-    cbf_table.add_column("time/usage_start", style="blue", no_wrap=False)
-    cbf_table.add_column("cost/cost", style="green", justify="right", no_wrap=False)
-    cbf_table.add_column("usage/amount", style="yellow", justify="right", no_wrap=False)
-    cbf_table.add_column("resource/id", style="magenta", no_wrap=False)
-    cbf_table.add_column("resource/service", style="cyan", no_wrap=False)
-    cbf_table.add_column("resource/account", style="white", no_wrap=False)
-    cbf_table.add_column("resource/region", style="dim", no_wrap=False)
-
-    for record in records:
-        # Use proper CBF field names
-        time_usage_start = str(record.get('time/usage_start', 'N/A'))
-        cost_cost = str(record.get('cost/cost', 0))
-        usage_amount = str(record.get('usage/amount', 0))
-        resource_id = str(record.get('resource/id', 'N/A'))
-        resource_service = str(record.get('resource/service', 'N/A'))
-        resource_account = str(record.get('resource/account', 'N/A'))
-        resource_region = str(record.get('resource/region', 'N/A'))
-
-        cbf_table.add_row(
-            time_usage_start,
-            cost_cost,
-            usage_amount,
-            resource_id,
-            resource_service,
-            resource_account,
-            resource_region
-        )
-
-    console.print(cbf_table)
-
-    # Show summary statistics
-    total_cost = sum(record.get('cost/cost', 0) for record in records)
-    unique_accounts = len({record.get('resource/account', '') for record in records if record.get('resource/account')})
-    unique_services = len({record.get('resource/service', '') for record in records if record.get('resource/service')})
-
-    # Count total tokens from usage metrics
-    total_tokens = sum(record.get('usage/amount', 0) for record in records)
-
-    console.print("\n[bold blue]📊 CBF Summary[/bold blue]")
-    console.print(f"  Records: {len(records):,}")
-    console.print(f"  Total Cost: ${total_cost:.2f}")
-    console.print(f"  Total Tokens: {total_tokens:,}")
-    console.print(f"  Unique Accounts: {unique_accounts}")
-    console.print(f"  Unique Services: {unique_services}")
-
-    console.print("\n[dim]💡 This is the CloudZero CBF format ready for AnyCost ingestion[/dim]")
-
-
-
-def _create_complete_documentation(schema_info: dict) -> str:
-    """Create complete documentation content."""
-    doc = []
-    doc.append("# Complete LiteLLM Database Schema Documentation")
-    doc.append("")
-    doc.append("## Overview")
-    doc.append("")
-    doc.append(f"This document provides a comprehensive overview of all {schema_info['table_count']} LiteLLM tables discovered in the database.")
-    doc.append("")
-    doc.append("## Table Summary")
-    doc.append("")
-    doc.append("| Table Name | Columns | Rows | Primary Keys | Foreign Keys | Indexes |")
-    doc.append("|------------|---------|------|--------------|--------------|---------|")
-
-    for table_name, table_info in schema_info['tables'].items():
-        pk_display = ', '.join(table_info['primary_keys']) if table_info['primary_keys'] else 'None'
-        doc.append(f"| {table_name} | {len(table_info['columns'])} | {table_info['row_count']:,} | {pk_display} | {len(table_info['foreign_keys'])} | {len(table_info['indexes'])} |")
-
-    doc.append("")
-    doc.append("## Detailed Table Schemas")
-    doc.append("")
-
-    for table_name, table_info in schema_info['tables'].items():
-        doc.append(f"### {table_name}")
-        doc.append("")
-        doc.append(f"**Row Count:** {table_info['row_count']:,}")
-        doc.append("")
-
-        # Columns
-        doc.append("#### Columns")
-        doc.append("")
-        doc.append("| Column | Type | Nullable | Default | Length/Precision |")
-        doc.append("|--------|------|----------|---------|------------------|")
-
-        for col in table_info['columns']:
-            nullable = "YES" if col['is_nullable'] == 'YES' else "NO"
-            default = col['column_default'] or 'None'
-            if len(default) > 30:
-                default = default[:27] + "..."
-
-            type_info = col['data_type']
-            if col['character_maximum_length']:
-                type_info += f"({col['character_maximum_length']})"
-            elif col['numeric_precision']:
-                type_info += f"({col['numeric_precision']}"
-                if col['numeric_scale']:
-                    type_info += f",{col['numeric_scale']}"
-                type_info += ")"
-
-            doc.append(f"| {col['column_name']} | {type_info} | {nullable} | {default} | {col['character_maximum_length'] or col['numeric_precision'] or ''} |")
-
-        # Primary Keys
-        if table_info['primary_keys']:
-            doc.append("")
-            doc.append("#### Primary Keys")
-            doc.append("")
-            for pk in table_info['primary_keys']:
-                doc.append(f"- `{pk}`")
-
-        # Foreign Keys
-        if table_info['foreign_keys']:
-            doc.append("")
-            doc.append("#### Foreign Keys")
-            doc.append("")
-            doc.append("| Column | References |")
-            doc.append("|--------|------------|")
-            for fk in table_info['foreign_keys']:
-                doc.append(f"| {fk['column_name']} | {fk['foreign_table_name']}.{fk['foreign_column_name']} |")
-
-        # Indexes
-        if table_info['indexes']:
-            doc.append("")
-            doc.append("#### Indexes")
-            doc.append("")
-            doc.append("| Index Name | Columns | Unique |")
-            doc.append("|------------|---------|--------|")
-            for idx in table_info['indexes']:
-                unique = "YES" if idx['is_unique'] else "NO"
-                columns = ', '.join(idx['column_names']) if isinstance(idx['column_names'], list) else str(idx['column_names'])
-                doc.append(f"| {idx['index_name']} | {columns} | {unique} |")
-
-        doc.append("")
-        doc.append("---")
-        doc.append("")
-
-    # ERD Section
-    doc.append("## Entity Relationship Diagram")
-    doc.append("")
-    doc.append("```mermaid")
-    doc.append("erDiagram")
-
-    for table_name, table_info in schema_info['tables'].items():
-        doc.append(f"    {table_name} {{")
-        for col in table_info['columns']:
-            type_display = col['data_type']
-            pk_marker = " PK" if col['column_name'] in table_info['primary_keys'] else ""
-            doc.append(f"        {type_display} {col['column_name']}{pk_marker}")
-        doc.append("    }")
-        doc.append("")
-
-    # Add relationships
-    for table_name, table_info in schema_info['tables'].items():
-        for fk in table_info['foreign_keys']:
-            doc.append(f"    {table_name} ||--o| {fk['foreign_table_name']} : {fk['column_name']}")
-
-    doc.append("```")
-    doc.append("")
-
-    return '\n'.join(doc)
-
-
-# Note: _parse_date_specification and _load_filtered_data functions have been replaced
-# by DateParser class and DataSourceStrategy pattern for better code organization
-
-
-def _display_enhanced_test_payloads(cbf_data: pl.DataFrame, operation: str, mode: str) -> None:
-    """Display enhanced test payloads with operation and mode information."""
-    if cbf_data.is_empty():
-        console.print("[yellow]No CBF data to display[/yellow]")
-        return
-
-    console.print("\n[bold yellow]🧪 Enhanced Test Mode - CloudZero AnyCost API Payloads[/bold yellow]")
-    console.print(f"[blue]Mode: {mode} | Operation: {operation} | Records: {len(cbf_data)}[/blue]")
-    console.print("[dim]These payloads would be batched by day and sent to the CloudZero AnyCost API:[/dim]\n")
-
-    # Show first few records as examples
-    records = cbf_data.to_dicts()
-
-    # Group by date for demonstration
-    from collections import defaultdict
-    daily_groups = defaultdict(list)
-
-    for record in records:
-        timestamp = record.get('time/usage_start', '')
-        if timestamp:
-            try:
-                date_part = timestamp.split('T')[0] if 'T' in timestamp else timestamp[:10]
-                daily_groups[date_part].append(record)
-            except Exception:
-                daily_groups['unknown'].append(record)
-
-    shown_batches = 0
-    for date_key, batch_records in daily_groups.items():
-        if shown_batches >= 3:  # Show max 3 batches
-            break
-
-        console.print(f"[bold cyan]Daily Batch for {date_key} ({len(batch_records)} records):[/bold cyan]")
-
-        # Show the API payload structure
-        month_str = date_key[:7] if len(date_key) >= 7 else datetime.now().strftime('%Y-%m')
-
-        # Convert records to API format for display
-        from .output import CloudZeroStreamer
-        temp_streamer = CloudZeroStreamer("test", "test")
-        api_records = []
-        for record in batch_records[:2]:  # Show first 2 records as example
-            api_record = temp_streamer._convert_cbf_to_api_format(record)
-            if api_record:
-                api_records.append(api_record)
-
-        batch_payload = {
-            'month': month_str,
-            'operation': operation,
-            'data': api_records
-        }
-
-        import json
-        json_payload = json.dumps(batch_payload, indent=2, default=str)
-        console.print(f"[white]{json_payload}[/white]")
-
-        if len(batch_records) > 2:
-            console.print(f"[dim]... and {len(batch_records) - 2} more records in this batch[/dim]")
-
-        console.print()  # Add spacing
-        shown_batches += 1
-
-    if len(daily_groups) > 3:
-        console.print(f"[dim]... and {len(daily_groups) - 3} more daily batches[/dim]")
-
-    # Show summary
-    total_records = len(records)
-    total_batches = len(daily_groups)
-
-    console.print("[bold green]📋 Test Summary[/bold green]")
-    console.print(f"  Total records: {total_records}")
-    console.print(f"  Daily batches: {total_batches}")
-    console.print(f"  Operation: {operation}")
-    console.print(f"  Mode: {mode}")
-    console.print("\n[dim]💡 Remove --test flag to actually transmit these batches to CloudZero AnyCost API[/dim]")
-
-
-@app.callback()
-def main(
-    version: Annotated[Optional[bool], typer.Option("--version", callback=version_callback, help="Show version and exit")] = None,
-) -> None:
-    """LiteLLM to CloudZero ETL tool."""
-    pass
+        import os
+        if os.environ.get('LL2CZ_DEBUG'):
+            import traceback
+            console.print("[dim]Full traceback:[/dim]")
+            console.print(traceback.format_exc())
+        sys.exit(1)
 
 
 if __name__ == '__main__':
-    app()
-
+    main()

@@ -310,18 +310,23 @@ class LiteLLMDatabase:
             conn.close()
 
     def get_individual_table_data(self, table_type: str, limit: int | None = None, force_refresh: bool = False) -> pl.DataFrame:
-        """Get data from a specific table type (user/team/tag) directly from database."""
+        """Get data from a specific table type (user/team/tag/logs) directly from database."""
         # Map table type to actual table name
         table_mapping = {
             'user': 'LiteLLM_DailyUserSpend',
             'team': 'LiteLLM_DailyTeamSpend',
-            'tag': 'LiteLLM_DailyTagSpend'
+            'tag': 'LiteLLM_DailyTagSpend',
+            'logs': 'LiteLLM_SpendLogs'
         }
 
         if table_type not in table_mapping:
             raise ValueError(f"Invalid table type: {table_type}. Must be one of: {', '.join(table_mapping.keys())}")
 
         table_name = table_mapping[table_type]
+
+        # Special handling for SpendLogs table
+        if table_type == 'logs':
+            return self.get_spend_logs_data(limit=limit)
 
         # Build query based on table type
         if table_type == 'user':

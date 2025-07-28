@@ -6,7 +6,7 @@
 import re
 from typing import Any
 
-from .transformations import extract_model_name, normalize_component, normalize_service
+from .transformations import extract_model_name, generate_resource_id, normalize_component, normalize_service
 
 
 class CZRNGenerator:
@@ -81,13 +81,10 @@ class CZRNGenerator:
                 # For SpendLogs, still use model for cloud_local_id but it's optional
                 model = row.get('model', '').strip() if row.get('model') else ''
                 if model:
-                    if custom_llm_provider not in model:
-                        cloud_local_id = f"{custom_llm_provider}/{model}"
-                    else:
-                        cloud_local_id = model
+                    cloud_local_id = generate_resource_id(model, custom_llm_provider)
                 else:
                     # If no model, use provider/call_type
-                    cloud_local_id = f"{custom_llm_provider}/{call_type}"
+                    cloud_local_id = generate_resource_id(call_type, custom_llm_provider)
             else:
                 # For user tables, use model for both resource type and cloud_local_id
                 model = row.get('model', '').strip() if row.get('model') else ''
@@ -102,14 +99,8 @@ class CZRNGenerator:
                 # Extract the core model name to use as the resource-type field
                 resource_type = self.extract_model_name(model)
 
-                # Set cloud_local_id to custom_llm_provider/model if custom_llm_provider not in model
-                if custom_llm_provider not in model:
-                    cloud_local_id = f"{custom_llm_provider}/{model}"
-                else:
-                    cloud_local_id = model
-
-            # Replace colons with pipes in cloud_local_id for compatibility
-            cloud_local_id = cloud_local_id.replace(':', '|')
+                # Generate consistent resource ID
+                cloud_local_id = generate_resource_id(model, custom_llm_provider)
 
             # Validate cloud_local_id is not invalid
             if not cloud_local_id or cloud_local_id.strip() == '' or cloud_local_id == '*':

@@ -14,6 +14,7 @@ from rich.table import Table
 
 from .transformations import (
     extract_model_name,
+    generate_resource_id,
     normalize_component,
     normalize_service,
     parse_date,
@@ -132,9 +133,7 @@ class ConsolidatedErrorTracker:
                     if provider_sample and resource_sample:
                         provider = str(provider_sample[0])
                         resource = str(resource_sample[0])
-                        cloud_local_id = f'{provider}/{resource}'
-                        # Replace colons with pipes for compatibility
-                        cloud_local_id = cloud_local_id.replace(':', '|')
+                        cloud_local_id = generate_resource_id(resource, provider)
                         sample_values = [cloud_local_id]
                     else:
                         sample_values = ['provider/resource-name']
@@ -180,9 +179,7 @@ class ConsolidatedErrorTracker:
                     if provider_sample and resource_sample:
                         provider = str(provider_sample[0])
                         resource = str(resource_sample[0])
-                        cloud_local_id = f'{provider}/{resource}'
-                        # Replace colons with pipes for compatibility
-                        cloud_local_id = cloud_local_id.replace(':', '|')
+                        cloud_local_id = generate_resource_id(resource, provider)
                         sample_values = [cloud_local_id]
                     else:
                         sample_values = ['openai/gpt-4']

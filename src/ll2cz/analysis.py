@@ -24,14 +24,13 @@ class DataAnalyzer:
         self.database = database
         self.console = Console()
 
-    def analyze(self, limit: int = 10000, force_refresh: bool = False, show_czrn_analysis: bool = True, source: str = "usertable") -> dict[str, Any]:
+    def analyze(self, limit: int = 10000, source: str = "usertable", cbf_example_limit: int = 5) -> dict[str, Any]:
         """Perform comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation.
 
         Args:
             limit: Number of records to analyze
-            force_refresh: Force refresh cache from server
-            show_czrn_analysis: Whether to include detailed CZRN generation analysis
             source: Data source - 'usertable' for user/team/tag tables or 'logs' for SpendLogs table
+            cbf_example_limit: Number of CBF transformation examples to generate
         """
         # Load data based on the specified source
         if source == "logs":
@@ -43,7 +42,7 @@ class DataAnalyzer:
         else:
             # Use traditional user/team/tag aggregated data
             if isinstance(self.database, CachedLiteLLMDatabase):
-                raw_data = self.database.get_usage_data(limit=limit, force_refresh=force_refresh)
+                raw_data = self.database.get_usage_data(limit=limit)
             else:
                 raw_data = self.database.get_usage_data(limit=limit)
         table_info = self.database.get_table_info()
@@ -55,13 +54,13 @@ class DataAnalyzer:
         cbf_examples = []
         if not data.is_empty():
             processor = DataProcessor(source=source)
-            sample_data = data.head(3)  # Transform first 3 records as examples
+            sample_data = data.head(cbf_example_limit)  # Transform specified number of records as examples
             _, cbf_records, _ = processor.process_dataframe(sample_data)
             cbf_examples = cbf_records
 
-        # CZRN analysis data (if requested)
+        # CZRN analysis data
         czrn_analysis_data = None
-        if show_czrn_analysis and not data.is_empty():
+        if not data.is_empty():
             czrn_analysis_data = self._perform_czrn_analysis(data, source)
 
         return {
@@ -197,7 +196,6 @@ class DataAnalyzer:
         """Print analysis results to console using rich formatting."""
         table_info = analysis['table_info']
         data_summary = analysis['data_summary']
-        column_analysis = analysis['column_analysis']
 
         # Table Structure - compact format
         self.console.print("\n[bold blue]📊 Database Overview[/bold blue]")
@@ -258,9 +256,6 @@ class DataAnalyzer:
             czrn_data = analysis['czrn_analysis']
             if czrn_data.get('field_analysis'):
                 czrn_data['error_tracker'].print_source_field_analysis(czrn_data['field_analysis'], source)
-        else:
-            # Fallback to basic column analysis if CZRN analysis not available
-            self._print_basic_column_analysis(column_analysis)
 
         # 4. CZRN GENERATION ANALYSIS
         if analysis.get('czrn_analysis'):
@@ -355,9 +350,9 @@ class DataAnalyzer:
         total_records = len(cbf_examples)
         if cbf_examples:
             sample_tag_count = sum(1 for key in cbf_examples[0].keys() if key.startswith('resource/tag:'))
-            self.console.print(f"\n[dim]💡 {total_records} sample CBF record(s) with {sample_tag_count} resource tags each • Use --csv or --cz-api-key to export all data[/dim]")
+            self.console.print(f"\n[dim]💡 Showing {total_records} CBF transformation example(s) with {sample_tag_count} resource tags each • Use --csv or --cz-api-key to export all data[/dim]")
         else:
-            self.console.print(f"\n[dim]💡 {total_records} sample CBF record(s) • Use --csv or --cz-api-key to export all data[/dim]")
+            self.console.print(f"\n[dim]💡 {total_records} CBF transformation example(s) • Use --csv or --cz-api-key to export all data[/dim]")
 
 
     def _print_czrn_list(self, czrn_results: list[dict[str, Any]]) -> None:
@@ -570,41 +565,6 @@ class DataAnalyzer:
             'processor_errors': error_summary
         }
 
-    def _print_basic_column_analysis(self, column_analysis: dict[str, dict[str, Any]]) -> None:
-        """Print basic column analysis when CZRN analysis is not available."""
-        self.console.print("\n[bold cyan]🗂️  Column Analysis[/bold cyan]")
-
-        # Use a compact table with lightweight formatting, no width limits to prevent truncation
-        from rich.box import SIMPLE
-        columns_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
-        columns_table.add_column("Column", style="cyan", no_wrap=False)
-        columns_table.add_column("Type", style="magenta", no_wrap=False)
-        columns_table.add_column("Unique", justify="right", style="blue", no_wrap=False)
-        columns_table.add_column("Null", justify="right", style="red", no_wrap=False)
-        columns_table.add_column("Sample/Stats", style="dim", no_wrap=False)
-
-        for column, stats in column_analysis.items():
-            stats_text = ""
-
-            if 'top_values' in stats:
-                top_items = list(stats['top_values'].items())  # Show ALL items, no truncation
-                stats_text = ", ".join([f"'{k}': {v}" for k, v in top_items])
-
-            elif 'stats' in stats:
-                stats_info = stats['stats']
-                stats_text = f"min: {stats_info['min']}, max: {stats_info['max']}, mean: {stats_info['mean']:.4f}"
-
-            # Show full column name - no truncation
-            columns_table.add_row(
-                column,
-                stats['data_type'].replace("String", "Str").replace("Datetime", "Date"),  # Shorter types
-                f"{stats['unique_count']:,}",
-                f"{stats['null_count']:,}",
-                stats_text
-            )
-
-        self.console.print(columns_table)
-
     def get_error_tracker(self) -> ConsolidatedErrorTracker:
         """Get the current error tracker instance."""
         # Create processor to access its error tracker
@@ -752,7 +712,7 @@ class DataAnalyzer:
 
             self.console.print()  # Add spacing between error groups
 
-    def spend_analysis(self, limit: int | None = 10000, force_refresh: bool = False) -> None:
+    def spend_analysis(self, limit: int | None = 10000) -> None:
         """Perform comprehensive spend analysis based on teams and users."""
         if limit is None:
             self.console.print("\n[bold blue]💰 Spend Analysis - Processing all records[/bold blue]")
@@ -761,7 +721,7 @@ class DataAnalyzer:
 
         # Get data from cache/database - use spend analysis data to include both user and team data
         if isinstance(self.database, CachedLiteLLMDatabase):
-            raw_data = self.database.get_spend_analysis_data(limit=limit, force_refresh=force_refresh)
+            raw_data = self.database.get_spend_analysis_data(limit=limit)
         else:
             raw_data = self.database.get_spend_analysis_data(limit=limit)
 
@@ -788,7 +748,7 @@ class DataAnalyzer:
         self._analyze_spend_logs_fields(limit=limit)
 
         # Add cost comparison between SpendLogs and user tables
-        self._analyze_cost_comparison(limit=limit, force_refresh=force_refresh)
+        self._analyze_cost_comparison(limit=limit)
 
     def _analyze_spend_by_entity(self, data: pl.DataFrame) -> None:
         """Analyze spending breakdown by entity type (teams vs users)."""
@@ -1204,14 +1164,14 @@ class DataAnalyzer:
         wider_console = Console(width=200, force_terminal=True)
         wider_console.print(czrn_table)
 
-    def _analyze_cost_comparison(self, limit: int | None = None, force_refresh: bool = False) -> None:
+    def _analyze_cost_comparison(self, limit: int | None = None) -> None:
         """Compare costs between SpendLogs and user tables to identify discrepancies."""
         self.console.print("\n[bold magenta]📊 Cost Comparison: SpendLogs vs User Tables[/bold magenta]")
 
         try:
             # Get data from both sources
             if isinstance(self.database, CachedLiteLLMDatabase):
-                usertable_data = self.database.get_spend_analysis_data(limit=limit, force_refresh=force_refresh)
+                usertable_data = self.database.get_spend_analysis_data(limit=limit)
                 spendlogs_data = self.database.get_spend_logs_for_analysis(limit=limit)
             else:
                 usertable_data = self.database.get_spend_analysis_data(limit=limit)

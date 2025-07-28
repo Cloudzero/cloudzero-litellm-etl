@@ -4,23 +4,22 @@
 """Strategy pattern implementation for handling different data sources."""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Dict, Optional
 
 import polars as pl
 from rich.console import Console
 
-from .database import LiteLLMDatabase
 from .cached_database import CachedLiteLLMDatabase
-from .date_utils import DateParser
+from .database import LiteLLMDatabase
 
 console = Console()
 
 
 class DataSourceStrategy(ABC):
     """Abstract base class for data source strategies."""
-    
+
     @abstractmethod
-    def get_data(self, database: LiteLLMDatabase, 
+    def get_data(self, database: LiteLLMDatabase,
                  date_filter: Optional[Dict[str, str]] = None,
                  limit: Optional[int] = None) -> pl.DataFrame:
         """Fetch data from the specific source.
@@ -34,12 +33,12 @@ class DataSourceStrategy(ABC):
             Polars DataFrame with the fetched data
         """
         pass
-    
+
     @abstractmethod
     def get_source_name(self) -> str:
         """Get human-readable source name."""
         pass
-    
+
     @abstractmethod
     def get_table_name(self) -> str:
         """Get the database table name."""
@@ -48,7 +47,7 @@ class DataSourceStrategy(ABC):
 
 class UserTableStrategy(DataSourceStrategy):
     """Strategy for fetching data from the LiteLLMSpendCalculator table."""
-    
+
     def get_data(self, database: LiteLLMDatabase,
                  date_filter: Optional[Dict[str, str]] = None,
                  limit: Optional[int] = None) -> pl.DataFrame:
@@ -63,17 +62,17 @@ class UserTableStrategy(DataSourceStrategy):
         else:
             console.print("[blue]Fetching all data from user table...[/blue]")
             return database.get_usage_data(limit=limit)
-    
+
     def get_source_name(self) -> str:
         return "UserTable (LiteLLMSpendCalculator)"
-    
+
     def get_table_name(self) -> str:
         return "LiteLLMSpendCalculator"
 
 
 class SpendLogsStrategy(DataSourceStrategy):
     """Strategy for fetching data from the SpendLogs table."""
-    
+
     def get_data(self, database: LiteLLMDatabase,
                  date_filter: Optional[Dict[str, str]] = None,
                  limit: Optional[int] = None) -> pl.DataFrame:
@@ -94,23 +93,23 @@ class SpendLogsStrategy(DataSourceStrategy):
             # For non-cached database, use the analysis method
             console.print("[blue]Fetching data from SpendLogs for analysis...[/blue]")
             return database.get_spend_logs_for_analysis(limit=limit)
-    
+
     def get_source_name(self) -> str:
         return "SpendLogs"
-    
+
     def get_table_name(self) -> str:
         return "SpendLogs"
 
 
 class DataSourceFactory:
     """Factory for creating data source strategies."""
-    
+
     _strategies = {
         'usertable': UserTableStrategy,
         'logs': SpendLogsStrategy,
         'spendlogs': SpendLogsStrategy,  # Alias
     }
-    
+
     @classmethod
     def create_strategy(cls, source_type: str) -> DataSourceStrategy:
         """Create a data source strategy based on source type.
@@ -130,9 +129,9 @@ class DataSourceFactory:
                 f"Unknown source type: {source_type}. "
                 f"Valid options are: {', '.join(cls._strategies.keys())}"
             )
-        
+
         return cls._strategies[source_type]()
-    
+
     @classmethod
     def register_strategy(cls, name: str, strategy_class: type[DataSourceStrategy]):
         """Register a new data source strategy.

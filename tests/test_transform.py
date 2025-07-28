@@ -133,3 +133,43 @@ class TestCBFTransformer:
         # Should parse to midnight UTC with timezone
         assert record['time/usage_start'] == '2024-12-25T00:00:00+00:00'
 
+    def test_none_values_excluded_from_tags(self):
+        """Test that None values are excluded from resource tags."""
+        transformer = CBFTransformer()
+
+        data = pl.DataFrame([{
+            'id': 'none_test_123',
+            'date': '2024-01-01',
+            'entity_id': 'user_456',
+            'entity_type': 'user',
+            'api_key': 'sk-test123',
+            'model': 'gpt-3.5-turbo',
+            'model_group': 'openai/gpt-3.5-turbo',
+            'custom_llm_provider': 'openai',
+            'prompt_tokens': 100,
+            'completion_tokens': 50,
+            'spend': 0.002,
+            'api_requests': 1,
+            'successful_requests': 1,
+            'failed_requests': 0,
+            'cache_creation_input_tokens': 0,
+            'cache_read_input_tokens': 0,
+            'key_name': None,  # This should be excluded
+            'key_alias': '',   # This should be excluded
+            'user_email': 'test@example.com',
+            'team_alias': None,  # This should be excluded
+            'organization_alias': 'N/A'  # This should be excluded
+        }])
+
+        result = transformer.transform(data)
+        record = result.row(0, named=True)
+
+        # Check that None and empty values are not included as tags
+        assert 'resource/tag:key_name' not in record
+        assert 'resource/tag:key_alias' not in record
+        assert 'resource/tag:team_alias' not in record
+        assert 'resource/tag:organization_alias' not in record
+        
+        # Check that valid values are included
+        assert record['resource/tag:user_email'] == 'test@example.com'
+

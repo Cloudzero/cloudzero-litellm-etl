@@ -27,8 +27,8 @@ pip install ll2cz
 ### From Source
 
 ```bash
-git clone https://github.com/Cloudzero/cloudzero-litellm-etl.git
-cd cloudzero-litellm-etl
+git clone https://github.com/Cloudzero/cloudzero-litellm-toolkit.git
+cd cloudzero-litellm-toolkit
 uv sync
 ```
 
@@ -150,8 +150,8 @@ ll2cz analyze spend --limit 10000
 # Database schema analysis
 ll2cz analyze schema --output schema_docs.md
 
-# Force refresh cache
-ll2cz analyze data --force-refresh
+# Refresh cache from server (use cache commands)
+ll2cz cache refresh
 
 # Save analysis to JSON
 ll2cz analyze data --json analysis.json

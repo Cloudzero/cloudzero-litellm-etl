@@ -7,14 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2025-01-28
+
+### Changed
+- Renamed repository from `cloudzero-litellm-etl` to `cloudzero-litellm-toolkit`
+  - Updated all GitHub URLs in pyproject.toml
+  - Updated repository references in README.md
+  - Updated Git remote URL to reflect new name
+
+### Fixed
+- Exclude None values from CBF line item tags to prevent invalid tag values
+  - Updated `CBFBuilder.with_resource_tags()` to filter out None values
+  - Enhanced `transform.py` to exclude None, empty strings, and 'N/A' values from resource tags
+  - Added comprehensive test coverage for None value exclusion
+
+## [0.5.0] - 2025-01-27
+
+### Changed
+- Major refactoring for improved maintainability and performance
+- Reorganized code structure with dedicated modules for specific functionality
+- Enhanced error handling and logging throughout the codebase
+- Improved type hints and documentation
+
+### Added
+- Dedicated `cbf_builder.py` module with builder pattern for CBF record construction
+- Specialized error tracking module for better debugging
+- Enhanced transformation pipeline with clearer separation of concerns
+
+## [0.4.0] - 2025-01-26
+
+### Added
+- Comprehensive cost comparison analysis features
+- SpendLogs table support for detailed spend tracking
+- Enhanced analysis commands with more detailed reporting options
+- Cost trend analysis and anomaly detection capabilities
+
+### Changed
+- Improved data analysis output formatting
+- Enhanced spend analysis with better grouping and aggregation
+- Updated CLI commands for better user experience
+
+## [0.3.0] - 2025-01-25
+
+### Changed
+- Updated CBF schema mappings for better CloudZero compatibility
+- Enhanced model name extraction algorithm to handle more edge cases
+- Improved CZRN generation with better normalization
+- Updated resource field mappings to align with CloudZero's latest requirements
+
+### Fixed
+- Model name extraction now properly handles version suffixes
+- CZRN generation correctly handles special characters
+- Fixed edge cases in provider normalization
+
+## [0.2.1] - 2025-01-24
+
+### Fixed
+- Fixed all tests and linting issues after CZRN/CBF mapping changes
+- Corrected CZRN/CBF mapping to use key_alias or api_key for owner-account-id
+- Fixed import issues and type annotations
+
+### Changed
+- Updated entity identification logic for better accuracy
+- Improved error messages for configuration issues
+
+## [0.2.0] - 2025-01-24
+
 ### Added
 - CONTRIBUTING.md with comprehensive development guidelines
 - CHANGELOG.md for tracking project changes
 - SECURITY.md for vulnerability reporting process
+- PyPI package publishing support
+- Comprehensive CLI documentation
 
 ### Changed
 - Enhanced transmission output to show API operation being used (`replace_hourly` or `sum`)
 - Improved date filter display to show human-readable description instead of raw JSON
+- Updated package structure for PyPI distribution
+- Improved README with installation instructions from PyPI
+
+### Fixed
+- Configuration command syntax in documentation
+- Various documentation inconsistencies
 
 ## [0.1.1] - 2025-01-23
 

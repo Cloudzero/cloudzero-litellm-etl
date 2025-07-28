@@ -345,7 +345,10 @@ class DataCache:
 
     def get_cached_data(self, database: Optional[LiteLLMDatabase], connection_string: str,
                        limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
-        """Get data from cache, refreshing if necessary."""
+        """Get data from cache, refreshing if necessary.
+        
+        Note: force_refresh is kept for internal use by the refresh_cache command.
+        Users should use 'cache refresh' command to update cache."""
 
         # First check if cache is empty and force refresh if so
         cache_empty = self._is_cache_empty()

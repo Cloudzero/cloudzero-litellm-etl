@@ -126,17 +126,17 @@ class CBFTransformer:
             'cache_creation_tokens': str(row.get('cache_creation_input_tokens', 0)),
             'cache_read_tokens': str(row.get('cache_read_input_tokens', 0)),
             # Enriched API key information
-            'key_name': str(row.get('key_name', '')),
-            'key_alias': str(row.get('key_alias', '')),
+            'key_name': row.get('key_name', ''),
+            'key_alias': row.get('key_alias', ''),
             # Enriched user information
-            'user_alias': str(row.get('user_alias', '')),
-            'user_email': str(row.get('user_email', '')),
+            'user_alias': row.get('user_alias', ''),
+            'user_email': row.get('user_email', ''),
             # Enriched team information
-            'team_alias': str(row.get('team_alias', '')),
-            'team_id': str(row.get('team_id', '')),
+            'team_alias': row.get('team_alias', ''),
+            'team_id': row.get('team_id', ''),
             # Enriched organization information
-            'organization_alias': str(row.get('organization_alias', '')),
-            'organization_id': str(row.get('organization_id', '')),
+            'organization_alias': row.get('organization_alias', ''),
+            'organization_id': row.get('organization_id', ''),
         }
 
         # Extract CZRN components to populate corresponding CBF columns
@@ -176,7 +176,7 @@ class CBFTransformer:
 
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():
-            if value and value != 'N/A':  # Only add non-empty tags
+            if value is not None and value != '' and value != 'N/A':  # Only add non-empty, non-None tags
                 cbf_record[f'resource/tag:{key}'] = str(value)
 
         # Add token breakdown as resource tags for analysis

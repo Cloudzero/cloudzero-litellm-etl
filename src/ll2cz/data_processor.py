@@ -15,13 +15,9 @@ import polars as pl
 
 from .error_tracking import ConsolidatedErrorTracker
 from .transformations import (
-    CBF_CONSTANT_MAPPINGS,
-    CBF_FIELD_MAPPINGS,
-    CZRN_CONSTANT_MAPPINGS,
-    CZRN_FIELD_MAPPINGS,
-    SPENDLOGS_CBF_FIELD_MAPPINGS,
-    SPENDLOGS_CZRN_FIELD_MAPPINGS,
     extract_model_name,
+    generate_resource_id,
+    get_field_mappings,
     normalize_component,
     normalize_service,
     parse_date,
@@ -47,15 +43,18 @@ class DataProcessor:
         self.source = source
         self.error_tracker = ConsolidatedErrorTracker()
 
-        # Select appropriate field mappings based on source
+        # Get field mappings based on source
+        mappings = get_field_mappings(source)
+        self.czrn_mappings = mappings['czrn']
+        self.cbf_mappings = mappings['cbf']
+        self.czrn_constants = mappings['czrn_constants']
+        self.cbf_constants = mappings['cbf_constants']
+        
+        # Set field names based on source
         if source == "logs":
-            self.czrn_mappings = SPENDLOGS_CZRN_FIELD_MAPPINGS
-            self.cbf_mappings = SPENDLOGS_CBF_FIELD_MAPPINGS
             self.resource_type_field = "call_type"
             self.usage_family_field = "call_type"
         else:
-            self.czrn_mappings = CZRN_FIELD_MAPPINGS
-            self.cbf_mappings = CBF_FIELD_MAPPINGS
             self.resource_type_field = "model"
             self.usage_family_field = "model"
 
@@ -178,8 +177,8 @@ class DataProcessor:
             Dictionary with 'czrn' and 'cbf' mapping dictionaries
         """
         return {
-            "czrn": {**self.czrn_mappings, **CZRN_CONSTANT_MAPPINGS},
-            "cbf": {**self.cbf_mappings, **CBF_CONSTANT_MAPPINGS}
+            "czrn": {**self.czrn_mappings, **self.czrn_constants},
+            "cbf": {**self.cbf_mappings, **self.cbf_constants}
         }
 
     def analyze_field_mapping(self, df: pl.DataFrame) -> Dict[str, Any]:
@@ -294,18 +293,17 @@ class DataProcessor:
         regardless of whether the source uses call_type or model for resource-type/usage_family.
         The full model name ensures different model versions are tracked as separate resources.
         """
-        service_type = self._extract_and_transform_field(
-            record, "custom_llm_provider", normalize_service, "unknown"
-        )
+        # Use the original provider name, not the normalized one
+        original_provider = self._extract_field(record, "custom_llm_provider", "unknown")
+
         # Always use full model name for cloud-local-id, regardless of source
         model_value = self._extract_field(record, "model")
         if model_value and str(model_value).strip() and str(model_value) != "*":
-            # Normalize the model name for cloud-local-id (but keep full version info)
-            full_model = normalize_component(str(model_value))
+            model = str(model_value)
         else:
-            full_model = "unknown"
+            model = "unknown"
 
-        return f"{service_type}/{full_model}"
+        return generate_resource_id(model, original_provider)
 
     def _get_usage_start_time(self, record: Dict[str, Any]) -> Optional[str]:
         """Get usage start time based on data source.

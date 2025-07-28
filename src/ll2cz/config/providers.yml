@@ -1,0 +1,148 @@
+# Provider normalization mappings
+# Maps various provider representations to standardized names
+provider_mappings:
+  # OpenAI variants
+  openai: openai
+  azure_openai: azure
+  azure: azure
+
+  # Anthropic variants
+  anthropic: anthropic
+  claude: anthropic
+
+  # AWS services
+  bedrock: aws
+  aws_bedrock: aws
+  sagemaker: aws
+  aws_sagemaker: aws
+  amazon_bedrock: aws
+  amazon: aws
+
+  # Google/GCP services
+  vertex_ai: gcp
+  gemini: gcp
+  google: gcp
+  gcp: gcp
+  googleai: gcp
+  google_vertex: gcp
+  google_gemini: gcp
+  palm: gcp
+
+  # Meta/Facebook
+  meta: meta
+  facebook: meta
+  llama: meta
+
+  # Microsoft
+  microsoft: microsoft
+  bing: microsoft
+
+  # Other providers
+  cohere: cohere
+  ai21: ai21
+  huggingface: huggingface
+  together_ai: together
+  together: together
+  fireworks_ai: fireworks
+  fireworks: fireworks
+  replicate: replicate
+  mistral: mistral
+  perplexity: perplexity
+  groq: groq
+  deepseek: deepseek
+  deepinfra: deepinfra
+  ollama: ollama
+  openrouter: openrouter
+  anyscale: anyscale
+  vllm: vllm
+  databricks: databricks
+  watsonx: ibm
+  ibm: ibm
+  custom: custom
+  local: local
+
+# Model name extraction configuration
+model_extraction:
+  # Version patterns to remove
+  version_patterns:
+    - '^[0-9]+$'                      # Pure numbers: "4", "3", "2"
+    - '^[0-9]+[a-z]$'                # Number+letter: "4o", "3b", "2t"
+    - '^[0-9]+\.[0-9]+$'             # Semantic: "3.5", "2.1"
+    - '^[0-9]+\.[0-9]+\.[0-9]+$'    # Full semantic: "1.2.3"
+    - '^v[0-9]+$'                    # Version prefix: "v1", "v2"
+    - '^v[0-9]+\.[0-9]+$'           # Version semantic: "v1.0", "v2.1"
+    - '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$'  # Date format: "2024.01.15"
+    - '^[0-9]{8}$'                  # Date format: "20240115", "20250219"
+    - '^[0-9]{6}$'                  # Short date: "240115"
+    - '^[0-9]+-[0-9]+-[0-9]+$'      # Hyphenated version: "3-7-sonnet"
+
+  # Version-related words to remove
+  version_words:
+    - latest
+    - stable
+    # - preview  # Removed from here since it's needed for o1-preview
+    - beta
+    - alpha
+    - rc
+    - release
+    - final
+    - dev
+    - nightly
+    - experimental
+    - test
+    - demo
+    - trial
+    - new
+    - updated
+    - improved
+    - enhanced
+    - plus
+    - pro
+    - hd
+    - vision
+
+  # Model variant words to preserve
+  model_variants:
+    # Claude model variants
+    - haiku
+    - sonnet
+    - opus
+    - instant
+    # GPT model variants
+    - turbo
+    - instruct
+    - vision
+    - mini
+    - preview  # Add preview as a model variant for o1-preview
+    # Common model variants
+    - chat
+    - text
+    - base
+    - small
+    - medium
+    - large
+    - xl
+    - xxl
+    - lite
+    - light
+    - fast
+    - slow
+    # Nova model types
+    - canvas
+    - micro
+    # Other model indicators
+    - embedding
+    - ada
+    - babbage
+    - curie
+    - davinci
+
+  # Known provider prefixes
+  known_providers:
+    - amazon
+    - google
+    - microsoft
+    - anthropic
+    - openai
+    - meta
+    - cohere

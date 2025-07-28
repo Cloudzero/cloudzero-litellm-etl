@@ -259,7 +259,6 @@ Options:
 - `--input TEXT` - Database connection URL
 - `--limit INTEGER` - Number of records to analyze (default: 10000)
 - `--json TEXT` - JSON output file for analysis results
-- `--force-refresh` - Force refresh cache from server
 - `--show-raw` - Show raw data tables instead of analysis
 - `--table TEXT` - Show specific table only (for --show-raw): 'user', 'team', 'tag', or 'all'
 
@@ -273,27 +272,11 @@ ll2cz analyze data --show-raw --table all
 # Show specific table only
 ll2cz analyze data --show-raw --table user
 
-# Force refresh cache
-ll2cz analyze data --force-refresh
+# Use cache commands to refresh
+ll2cz cache refresh
 
 # Save analysis to JSON
 ll2cz analyze data --json analysis.json
-```
-
-#### czrn
-Analyze CZRN (CloudZero Resource Name) generation from LiteLLM database data.
-
-```bash
-ll2cz analyze czrn [OPTIONS]
-```
-
-Options:
-- `--input TEXT` - Database connection URL
-- `--limit INTEGER` - Number of records to analyze (default: 10000)
-- `--force-refresh` - Force refresh cache from server
-
-```bash
-ll2cz analyze czrn --limit 10000
 ```
 
 #### spend
@@ -306,7 +289,6 @@ ll2cz analyze spend [OPTIONS]
 Options:
 - `--input TEXT` - Database connection URL
 - `--limit INTEGER` - Number of records to analyze (default: 10000)
-- `--force-refresh` - Force refresh cache from server
 
 ```bash
 ll2cz analyze spend --limit 10000

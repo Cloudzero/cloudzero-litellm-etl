@@ -14,7 +14,7 @@ console = Console()
 
 class DateParser:
     """Centralized date parsing functionality for consistent date handling across the application."""
-    
+
     def __init__(self, user_timezone: Optional[str] = None):
         """Initialize DateParser with user timezone.
         
@@ -22,7 +22,7 @@ class DateParser:
             user_timezone: Timezone string (e.g., 'US/Eastern', 'UTC'). Defaults to UTC.
         """
         self.user_timezone = self._parse_timezone(user_timezone)
-    
+
     def _parse_timezone(self, timezone_str: Optional[str]) -> zoneinfo.ZoneInfo:
         """Parse timezone string to ZoneInfo object.
         
@@ -34,13 +34,13 @@ class DateParser:
         """
         if not timezone_str or timezone_str == 'UTC':
             return timezone.utc
-            
+
         try:
             return zoneinfo.ZoneInfo(timezone_str)
         except zoneinfo.ZoneInfoNotFoundError:
             console.print(f"[yellow]Warning: Unknown timezone '{timezone_str}', using UTC[/yellow]")
             return timezone.utc
-    
+
     def parse_date_spec(self, mode: str, date_spec: Optional[str]) -> Optional[dict]:
         """Parse date specification based on mode.
         
@@ -55,7 +55,7 @@ class DateParser:
             ValueError: If date_spec format is invalid
         """
         now = datetime.now(self.user_timezone)
-        
+
         if mode == 'day':
             return self._parse_day_spec(date_spec, now)
         elif mode == 'month':
@@ -64,7 +64,7 @@ class DateParser:
             return None
         else:
             raise ValueError(f"Invalid mode: {mode}")
-    
+
     def _parse_day_spec(self, date_spec: Optional[str], now: datetime) -> dict:
         """Parse day specification.
         
@@ -85,9 +85,9 @@ class DateParser:
         else:
             start_date = now.strftime('%Y-%m-%d')
             end_date = start_date
-            
+
         return {'start_date': start_date, 'end_date': end_date, 'description': f"Day: {start_date}"}
-    
+
     def _parse_month_spec(self, date_spec: Optional[str], now: datetime) -> dict:
         """Parse month specification.
         
@@ -105,10 +105,10 @@ class DateParser:
                 raise ValueError(f"Invalid month format '{date_spec}'. Use MM-YYYY (e.g., 01-2024)")
         else:
             month_obj = now
-            
+
         # Get first day of month
         start_date = month_obj.strftime('%Y-%m-01')
-        
+
         # Calculate last day of month
         if month_obj.month == 12:
             next_month = month_obj.replace(year=month_obj.year + 1, month=1, day=1)
@@ -116,10 +116,10 @@ class DateParser:
             next_month = month_obj.replace(month=month_obj.month + 1, day=1)
         last_day = (next_month - timedelta(days=1)).day
         end_date = month_obj.strftime(f'%Y-%m-{last_day:02d}')
-        
+
         month_desc = month_obj.strftime('%B %Y')
         return {'start_date': start_date, 'end_date': end_date, 'description': f"Month: {month_desc}"}
-    
+
     def parse_timestamp(self, timestamp_str: str) -> datetime:
         """Parse timestamp string and convert to UTC.
         
@@ -146,13 +146,13 @@ class DateParser:
                 dt = datetime.fromisoformat(timestamp_str)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=self.user_timezone)
-            
+
             # Convert to UTC
             return dt.astimezone(timezone.utc)
-            
+
         except Exception as e:
             raise ValueError(f"Could not parse timestamp '{timestamp_str}': {e}")
-    
+
     def parse_date(self, date_value: Union[str, datetime, None]) -> Optional[datetime]:
         """Parse date from various formats into datetime object.
         
@@ -167,13 +167,13 @@ class DateParser:
         """
         if date_value is None:
             return None
-            
+
         if isinstance(date_value, datetime):
             # Ensure timezone awareness
             if date_value.tzinfo is None:
                 return date_value.replace(tzinfo=timezone.utc)
             return date_value.astimezone(timezone.utc)
-            
+
         if isinstance(date_value, str):
             # Try parsing as date only (YYYY-MM-DD)
             if len(date_value) == 10 and date_value.count('-') == 2:
@@ -182,13 +182,13 @@ class DateParser:
                     return dt.replace(tzinfo=timezone.utc)
                 except ValueError:
                     pass
-            
+
             # Try parsing as full timestamp
             try:
                 return self.parse_timestamp(date_value)
             except ValueError:
                 return None
-                
+
         return None
 
 

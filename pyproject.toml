@@ -1,6 +1,6 @@
 [project]
 name = "ll2cz"
-version = "0.5.0"
+version = "0.5.1"
 description = "Transform LiteLLM database data into CloudZero AnyCost CBF format"
 readme = "README.md"
 authors = [
@@ -26,22 +26,21 @@ dependencies = [
     "psycopg[binary]>=3.1.0",
     "polars>=0.20.0",
     "httpx>=0.25.0",
-    "typer>=0.12.0",
     "connectorx>=0.3.0",
+    "PyYAML>=6.0.0",
     "rich>=13.0.0",
-    "pyyaml>=6.0.0",
     "litellm>=1.74.7",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Cloudzero/cloudzero-litellm-etl"
-Documentation = "https://github.com/Cloudzero/cloudzero-litellm-etl/blob/main/README.md"
-Repository = "https://github.com/Cloudzero/cloudzero-litellm-etl.git"
-Issues = "https://github.com/Cloudzero/cloudzero-litellm-etl/issues"
-Changelog = "https://github.com/Cloudzero/cloudzero-litellm-etl/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Cloudzero/cloudzero-litellm-toolkit"
+Documentation = "https://github.com/Cloudzero/cloudzero-litellm-toolkit/blob/main/README.md"
+Repository = "https://github.com/Cloudzero/cloudzero-litellm-toolkit.git"
+Issues = "https://github.com/Cloudzero/cloudzero-litellm-toolkit/issues"
+Changelog = "https://github.com/Cloudzero/cloudzero-litellm-toolkit/blob/main/CHANGELOG.md"
 
 [project.scripts]
-ll2cz = "ll2cz.cli:app"
+ll2cz = "ll2cz.cli:main"
 
 [tool.ruff]
 line-length = 120

@@ -6,6 +6,7 @@
 from typing import Any, Optional
 
 import polars as pl
+from rich.console import Console
 
 from .cache import DataCache
 from .database import LiteLLMDatabase
@@ -18,6 +19,7 @@ class CachedLiteLLMDatabase:
         """Initialize cached database wrapper."""
         self.connection_string = connection_string
         self.cache = DataCache(cache_dir)
+        self.console = Console()
 
         # Only create database connection if connection string provided
         self.database: Optional[LiteLLMDatabase] = None
@@ -31,8 +33,8 @@ class CachedLiteLLMDatabase:
                 # Server unavailable, will use cache only
                 self.database = None
 
-    def get_usage_data(self, limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
-        """Get usage data from cache, refreshing from server if needed."""
+    def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
+        """Get usage data from cache."""
         if not self.connection_string:
             raise ValueError("No database connection string provided")
 
@@ -40,10 +42,10 @@ class CachedLiteLLMDatabase:
             self.database,
             self.connection_string,
             limit=limit,
-            force_refresh=force_refresh
+            force_refresh=False
         )
 
-    def get_spend_analysis_data(self, limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
+    def get_spend_analysis_data(self, limit: Optional[int] = None) -> pl.DataFrame:
         """Get spend analysis data from database directly (bypasses cache for fresh data)."""
         if not self.connection_string:
             raise ValueError("No database connection string provided")
@@ -126,13 +128,30 @@ class CachedLiteLLMDatabase:
             'cache_info': cache_info
         }
 
-    def get_individual_table_data(self, table_type: str, limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
-        """Get data from a specific table type (user/team/tag)."""
+    def get_individual_table_data(self, table_type: str, limit: Optional[int] = None) -> pl.DataFrame:
+        """Get data from a specific table type (user/team/tag/logs) directly from the raw table."""
         if not self.connection_string:
             raise ValueError("No database connection string provided")
 
-        # Get cached data and filter by entity type
-        data = self.cache.get_cached_data(self.database, self.connection_string, force_refresh=force_refresh)
+        # For raw table access, we need to query the database directly if available
+        # This ensures we get the actual raw table data, not the enriched/combined data
+        if self.database:
+            # Use the direct database query to get raw table data
+            try:
+                result = self.database.get_individual_table_data(table_type, limit=limit)
+                return result
+            except Exception as e:
+                # If direct query fails, log the error and try fallback
+                self.console.print(f"[yellow]Warning: Direct table query failed: {e}[/yellow]")
+                self.console.print("[yellow]Falling back to cached data[/yellow]")
+
+        # SpendLogs data is not cached, so if database is not available, raise error
+        if table_type == 'logs':
+            raise ConnectionError("SpendLogs data requires active server connection")
+
+        # Fallback to filtering cached data if no database connection or if direct query failed
+        # This is not ideal but allows offline mode to work
+        data = self.cache.get_cached_data(self.database, self.connection_string)
 
         # Filter by entity type
         filtered_data = data.filter(pl.col('entity_type') == table_type)
