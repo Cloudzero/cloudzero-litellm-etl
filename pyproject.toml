@@ -1,6 +1,6 @@
 [project]
 name = "ll2cz"
-version = "0.6.0"
+version = "0.6.1"
 description = "Transform LiteLLM database data into CloudZero AnyCost CBF format"
 readme = "README.md"
 authors = [

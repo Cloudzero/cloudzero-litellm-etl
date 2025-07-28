@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import polars as pl
 
 from .error_tracking import ConsolidatedErrorTracker
+from .model_name_strategies import extract_model_name
 from .transformations import (
-    extract_model_name,
     generate_resource_id,
     get_field_mappings,
     normalize_component,

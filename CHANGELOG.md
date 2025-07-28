@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2025-01-28
+
+### Fixed
+- Fixed import error in `data_processor.py` - `extract_model_name` now correctly imported from `model_name_strategies`
+- Added `__main__.py` to enable running package as module: `python -m ll2cz`
+
+### Added
+- Comprehensive import tests (`test_imports.py`) to prevent future import errors
+- CLI smoke tests (`test_cli_smoke.py`) to ensure all commands work without crashing
+- Tests for all critical imports and circular dependency detection
+
+### Testing
+- Verified all CLI commands work correctly: `transmit`, `analyze`, `transform`, `cache`, `config`
+- All 21 core tests passing
+- All 16 new import and smoke tests passing
+
 ## [0.6.0] - 2025-01-28
 
 ### Changed
