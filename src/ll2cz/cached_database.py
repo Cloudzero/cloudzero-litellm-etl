@@ -3,7 +3,7 @@
 
 """Cached database wrapper that provides offline support and data freshness management."""
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import polars as pl
 from rich.console import Console
@@ -56,7 +56,7 @@ class CachedLiteLLMDatabase:
 
         return self.database.get_spend_analysis_data(limit=limit)
 
-    def get_table_info(self) -> dict[str, Any]:
+    def get_table_info(self) -> Dict[str, Any]:
         """Get table information from cache."""
         # Force a cache refresh if empty, then get fresh cache info
         if self.cache._is_cache_empty() and self.database:
@@ -91,7 +91,7 @@ class CachedLiteLLMDatabase:
             'cache_info': cache_info
         }
 
-    def get_table_info_local_only(self) -> dict[str, Any]:
+    def get_table_info_local_only(self) -> Dict[str, Any]:
         """Get table information from cache only (no remote calls)."""
         cache_info = self.cache.get_cache_info(self.connection_string or "")
 
@@ -161,7 +161,7 @@ class CachedLiteLLMDatabase:
 
         return filtered_data
 
-    def discover_all_tables(self) -> dict[str, Any]:
+    def discover_all_tables(self) -> Dict[str, Any]:
         """Discover all tables - requires live database connection."""
         if not self.database:
             raise ConnectionError("Database discovery requires active server connection")
@@ -179,7 +179,7 @@ class CachedLiteLLMDatabase:
 
         self.cache.get_cached_data(self.database, self.connection_string, force_refresh=True)
 
-    def get_cache_status(self) -> dict[str, Any]:
+    def get_cache_status(self) -> Dict[str, Any]:
         """Get detailed cache status information (local cache only, no remote calls)."""
         if not self.connection_string:
             return {"error": "No connection string configured"}

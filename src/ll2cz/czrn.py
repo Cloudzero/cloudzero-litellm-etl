@@ -4,9 +4,10 @@
 """CloudZero Resource Names (CZRN) generation and validation for LiteLLM resources."""
 
 import re
-from typing import Any
+from typing import Any, Dict, Optional, Tuple
 
-from .transformations import extract_model_name, generate_resource_id, normalize_component, normalize_service
+from .model_name_strategies import extract_model_name
+from .transformations import generate_resource_id, normalize_component, normalize_service
 
 
 class CZRNGenerator:
@@ -33,7 +34,7 @@ class CZRNGenerator:
         """
         return extract_model_name(model)
 
-    def create_from_litellm_data(self, row: dict[str, Any], error_tracker=None, source: str = "usertable") -> str:
+    def create_from_litellm_data(self, row: Dict[str, Any], error_tracker=None, source: str = "usertable") -> str:
         """Create a CZRN from LiteLLM data (either user/team/tag tables or SpendLogs).
 
         CZRN format: czrn:<provider>:<service-type>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
@@ -138,7 +139,7 @@ class CZRNGenerator:
         resource_type: str,
         cloud_local_id: str,
         error_tracker=None,
-        source_data: dict = None
+        source_data: Optional[Dict[str, Any]] = None
     ) -> str:
         """Create a CZRN from individual components.
 
@@ -180,7 +181,7 @@ class CZRNGenerator:
         """Validate a CZRN string against the standard format."""
         return bool(self.CZRN_REGEX.match(czrn))
 
-    def extract_components(self, czrn: str) -> tuple[str, str, str, str, str, str]:
+    def extract_components(self, czrn: str) -> Tuple[str, str, str, str, str, str]:
         """Extract all components from a CZRN.
 
         Returns: (provider, service_type, region, owner_account_id, resource_type, cloud_local_id)

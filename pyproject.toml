@@ -1,6 +1,6 @@
 [project]
 name = "ll2cz"
-version = "0.5.1"
+version = "0.6.0"
 description = "Transform LiteLLM database data into CloudZero AnyCost CBF format"
 readme = "README.md"
 authors = [
@@ -15,13 +15,16 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Financial",
     "Topic :: System :: Systems Administration",
     "Topic :: Utilities",
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 dependencies = [
     "psycopg[binary]>=3.1.0",
     "polars>=0.20.0",
@@ -44,7 +47,7 @@ ll2cz = "ll2cz.cli:main"
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py39"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "C"]

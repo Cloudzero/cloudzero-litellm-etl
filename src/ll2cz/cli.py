@@ -14,10 +14,10 @@ from rich.console import Console
 from . import __version__
 from .analysis import DataAnalyzer
 from .cached_database import CachedLiteLLMDatabase
+from .cbf_transformer import CBFTransformer
 from .config import Config
 from .database import LiteLLMDatabase
 from .output import CSVWriter
-from .cbf_transformer import CBFTransformer
 from .transmit import DataTransmitter
 
 console = Console()

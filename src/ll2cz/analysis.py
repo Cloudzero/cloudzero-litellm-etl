@@ -3,7 +3,7 @@
 
 """Data analysis module for LiteLLM database inspection."""
 
-from typing import Any, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
 from rich.console import Console
@@ -24,7 +24,7 @@ class DataAnalyzer:
         self.database = database
         self.console = Console()
 
-    def analyze(self, limit: int = 10000, source: str = "usertable", cbf_example_limit: int = 5) -> dict[str, Any]:
+    def analyze(self, limit: int = 10000, source: str = "usertable", cbf_example_limit: int = 5) -> Dict[str, Any]:
         """Perform comprehensive analysis of LiteLLM data including source data summary, CZRN generation, and CBF transformation.
 
         Args:
@@ -73,7 +73,7 @@ class DataAnalyzer:
             'czrn_analysis': czrn_analysis_data
         }
 
-    def _analyze_data_summary(self, data: pl.DataFrame) -> dict[str, Any]:
+    def _analyze_data_summary(self, data: pl.DataFrame) -> Dict[str, Any]:
         """Analyze basic data summary statistics for daily spend data."""
         if data.is_empty():
             return {'message': 'No data available'}
@@ -121,7 +121,7 @@ class DataAnalyzer:
             }
         }
 
-    def _analyze_columns(self, data: pl.DataFrame) -> dict[str, dict[str, Any]]:
+    def _analyze_columns(self, data: pl.DataFrame) -> Dict[str, Dict[str, Any]]:
         """Analyze each column for unique values and statistics."""
         column_analysis = {}
 
@@ -167,7 +167,7 @@ class DataAnalyzer:
 
         return column_analysis
 
-    def _filter_successful_requests(self, data: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, Any]]:
+    def _filter_successful_requests(self, data: pl.DataFrame) -> Tuple[pl.DataFrame, Dict[str, Any]]:
         """Filter data to only include records with successful_requests > 0."""
         if data.is_empty():
             return data, {'original_count': 0, 'filtered_count': 0, 'removed_count': 0}
@@ -192,7 +192,7 @@ class DataAnalyzer:
 
         return filtered_data, filter_summary
 
-    def print_results(self, analysis: dict[str, Any], source: str = "usertable") -> None:
+    def print_results(self, analysis: Dict[str, Any], source: str = "usertable") -> None:
         """Print analysis results to console using rich formatting."""
         table_info = analysis['table_info']
         data_summary = analysis['data_summary']
@@ -275,7 +275,7 @@ class DataAnalyzer:
         if analysis.get('cbf_examples'):
             self._print_cbf_examples(analysis['cbf_examples'])
 
-    def _print_cbf_examples(self, cbf_examples: list[dict[str, Any]]) -> None:
+    def _print_cbf_examples(self, cbf_examples: List[Dict[str, Any]]) -> None:
         """Print CloudZero CBF transformation examples showing all standard CBF columns."""
         self.console.print("\n[bold yellow]💰 CBF Transformation Examples[/bold yellow]")
 
@@ -355,7 +355,7 @@ class DataAnalyzer:
             self.console.print(f"\n[dim]💡 {total_records} CBF transformation example(s) • Use --csv or --cz-api-key to export all data[/dim]")
 
 
-    def _print_czrn_list(self, czrn_results: list[dict[str, Any]]) -> None:
+    def _print_czrn_list(self, czrn_results: List[Dict[str, Any]]) -> None:
         """Print generated CZRNs as a deduplicated table with aligned components."""
 
         # Group results by CZRN for deduplication
@@ -456,7 +456,7 @@ class DataAnalyzer:
         # Show source records for unknown-account CZRNs
         self._show_unknown_account_details(czrn_groups)
 
-    def _show_unknown_account_details(self, czrn_groups: dict[str, list[dict[str, Any]]]) -> None:
+    def _show_unknown_account_details(self, czrn_groups: Dict[str, List[Dict[str, Any]]]) -> None:
         """Show source records for CZRNs with unknown-account owner account IDs."""
         unknown_account_czrns = {}
 
@@ -542,7 +542,7 @@ class DataAnalyzer:
 
             self.console.print()  # Add spacing between CZRNs
 
-    def _perform_czrn_analysis(self, data: pl.DataFrame, source: str = "usertable") -> dict[str, Any]:
+    def _perform_czrn_analysis(self, data: pl.DataFrame, source: str = "usertable") -> Dict[str, Any]:
         """Perform CZRN analysis on the provided data and return analysis results."""
         # Use centralized processor for consistent analysis
         processor = DataProcessor(source=source)
@@ -571,7 +571,7 @@ class DataAnalyzer:
         processor = DataProcessor()
         return processor.error_tracker
 
-    def _print_czrn_component_analysis(self, czrn_results: list[dict[str, Any]]) -> None:
+    def _print_czrn_component_analysis(self, czrn_results: List[Dict[str, Any]]) -> None:
         """Print analysis of CZRN components."""
         self.console.print("\n[bold yellow]🧩 CZRN Component Analysis[/bold yellow]")
 
@@ -648,7 +648,7 @@ class DataAnalyzer:
         self.console.print("\n[dim]💡 CZRNs follow format: czrn:provider:service-type:region:owner-account-id:resource-type:cloud-local-id[/dim]")
         self.console.print("[dim]🔍 Use generated CZRNs as resource_id values in CloudZero CBF records[/dim]")
 
-    def _print_czrn_errors(self, czrn_results: list[dict[str, Any]]) -> None:
+    def _print_czrn_errors(self, czrn_results: List[Dict[str, Any]]) -> None:
         """Print detailed error information for failed CZRN generations."""
         # Collect error results
         error_results = [result for result in czrn_results if result['czrn'].startswith('ERROR:')]
@@ -712,7 +712,7 @@ class DataAnalyzer:
 
             self.console.print()  # Add spacing between error groups
 
-    def spend_analysis(self, limit: int | None = 10000) -> None:
+    def spend_analysis(self, limit: Optional[int] = 10000) -> None:
         """Perform comprehensive spend analysis based on teams and users."""
         if limit is None:
             self.console.print("\n[bold blue]💰 Spend Analysis - Processing all records[/bold blue]")
@@ -1007,7 +1007,7 @@ class DataAnalyzer:
         self.console.print(f"\n[bold cyan]📅 Recent Activity (Last {len(recent_days)} Days)[/bold cyan]")
         self.console.print(trend_table)
 
-    def _analyze_spend_logs_fields(self, limit: int | None = 1000) -> None:
+    def _analyze_spend_logs_fields(self, limit: Optional[int] = 1000) -> None:
         """Analyze SpendLogs table fields and their unique values."""
         self.console.print("\n[bold yellow]📋 SpendLogs Field Analysis[/bold yellow]")
 
@@ -1107,7 +1107,7 @@ class DataAnalyzer:
                 else:
                     self.console.print("  [dim]No sample values available[/dim]")
 
-    def _print_deduplicated_czrn_list(self, czrns: list[str]) -> None:
+    def _print_deduplicated_czrn_list(self, czrns: List[str]) -> None:
         """Print a deduplicated list of CZRNs in a formatted table."""
         czrn_generator = CZRNGenerator()
 
@@ -1164,7 +1164,7 @@ class DataAnalyzer:
         wider_console = Console(width=200, force_terminal=True)
         wider_console.print(czrn_table)
 
-    def _analyze_cost_comparison(self, limit: int | None = None) -> None:
+    def _analyze_cost_comparison(self, limit: Optional[int] = None) -> None:
         """Compare costs between SpendLogs and user tables to identify discrepancies."""
         self.console.print("\n[bold magenta]📊 Cost Comparison: SpendLogs vs User Tables[/bold magenta]")
 
@@ -1196,7 +1196,7 @@ class DataAnalyzer:
         except Exception as e:
             self.console.print(f"[red]Error during cost comparison: {e}[/red]")
 
-    def _calculate_spend_metrics(self, data: pl.DataFrame, source_name: str) -> dict:
+    def _calculate_spend_metrics(self, data: pl.DataFrame, source_name: str) -> Dict[str, Any]:
         """Calculate key spending metrics from a data source."""
         if data.is_empty():
             return {
@@ -1273,7 +1273,7 @@ class DataAnalyzer:
             'date_range': date_range
         }
 
-    def _display_cost_comparison_table(self, usertable_metrics: dict, spendlogs_metrics: dict) -> None:
+    def _display_cost_comparison_table(self, usertable_metrics: Dict[str, Any], spendlogs_metrics: Dict[str, Any]) -> None:
         """Display a comparison table of key metrics between sources."""
         from rich.box import SIMPLE
         from rich.table import Table
@@ -1443,7 +1443,7 @@ class DataAnalyzer:
             else:
                 self.console.print(f"  {', '.join(sorted(list(sl_only_models)[:5]))} ... and {len(sl_only_models)-5} more")
 
-    def _analyze_cost_discrepancies(self, usertable_metrics: dict, spendlogs_metrics: dict) -> None:
+    def _analyze_cost_discrepancies(self, usertable_metrics: Dict[str, Any], spendlogs_metrics: Dict[str, Any]) -> None:
         """Analyze and highlight significant cost discrepancies."""
         self.console.print("\n[bold red]🚨 Cost Discrepancy Analysis[/bold red]")
 
@@ -1488,7 +1488,7 @@ class DataAnalyzer:
         else:
             self.console.print("[dim]  • Normal variance due to aggregation timing[/dim]")
 
-    def _get_date_range(self, data: pl.DataFrame, date_col: str) -> dict:
+    def _get_date_range(self, data: pl.DataFrame, date_col: str) -> Dict[str, Any]:
         """Get date range information from a DataFrame."""
         if data.is_empty() or date_col not in data.columns:
             return {'start': None, 'end': None, 'days': None}

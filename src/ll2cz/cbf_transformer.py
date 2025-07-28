@@ -17,10 +17,10 @@ from .database import LiteLLMDatabase
 
 class CBFTransformer:
     """Transform LiteLLM data to CloudZero Billing Format with database integration."""
-    
+
     def __init__(self, database: Union[LiteLLMDatabase, CachedLiteLLMDatabase], timezone: str = 'UTC'):
         """Initialize transformer with database connection.
-        
+
         Args:
             database: LiteLLM database connection
             timezone: Timezone for date operations
@@ -28,21 +28,21 @@ class CBFTransformer:
         self.database = database
         self.timezone = timezone
         self.console = Console()
-    
+
     def transform(self, limit: int = 10000, source: str = 'usertable') -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Transform data from database to CBF format.
-        
+
         Args:
             limit: Maximum number of records to process
             source: Data source ('usertable' or 'logs')
-            
+
         Returns:
             Tuple of (cbf_records, summary)
         """
         # Load data using strategy pattern
         strategy = DataSourceFactory.create_strategy(source)
         data = strategy.get_data(self.database, date_filter=None, limit=limit)
-        
+
         if data.is_empty():
             return [], {
                 'records_transformed': 0,
@@ -50,18 +50,18 @@ class CBFTransformer:
                 'total_spend': 0.0,
                 'total_tokens': 0
             }
-        
+
         # Process data to CBF format
         # Use chunked processing for large datasets
         if len(data) > 50000:
             self.console.print("[dim]Using chunked processing for large dataset...[/dim]")
             processor = DataProcessor(source=source)
             chunked_processor = ChunkedDataProcessor(chunk_size=10000, show_progress=True)
-            
+
             all_cbf_records = []
             def collect_results(cbf_records, error_summary):
                 all_cbf_records.extend(cbf_records)
-            
+
             total_records, successful_records, error_summary = chunked_processor.process_dataframe_chunked(
                 data, processor, callback=collect_results
             )
@@ -69,7 +69,7 @@ class CBFTransformer:
         else:
             processor = DataProcessor(source=source)
             _, cbf_records, error_summary = processor.process_dataframe(data)
-        
+
         # Calculate summary
         if cbf_records:
             cbf_df = pl.DataFrame(cbf_records)
@@ -89,5 +89,5 @@ class CBFTransformer:
                 'total_spend': 0.0,
                 'total_tokens': 0
             }
-        
+
         return cbf_records, summary

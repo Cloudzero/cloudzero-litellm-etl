@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-01-28
+
+### Changed
+- Expanded Python version support to include Python 3.9+
+  - Updated type annotations to use typing module imports instead of Python 3.10+ syntax
+  - Changed `dict[str, Any]` to `Dict[str, Any]`, `list[T]` to `List[T]`, etc.
+  - Changed `T | None` to `Optional[T]` for compatibility
+  - Updated pyproject.toml to require Python >=3.9
+  - Added Python version classifiers for 3.9, 3.10, 3.11
+
 ## [0.5.1] - 2025-01-28
 
 ### Changed

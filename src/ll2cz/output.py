@@ -7,7 +7,7 @@ import zoneinfo
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 import polars as pl
@@ -89,7 +89,7 @@ class CloudZeroStreamer:
         for batch_date, batch_data in daily_batches.items():
             self._send_daily_batch(batch_date, batch_data, operation)
 
-    def _group_by_date(self, data: pl.DataFrame) -> dict[str, pl.DataFrame]:
+    def _group_by_date(self, data: pl.DataFrame) -> Dict[str, pl.DataFrame]:
         """Group data by date, converting to UTC and validating dates."""
         daily_batches = {}
 
@@ -179,7 +179,7 @@ class CloudZeroStreamer:
             self.console.print(f"[red]✗ HTTP error sending batch for {batch_date}: {e.response.status_code} {e.response.text}[/red]")
             raise
 
-    def _prepare_batch_payload(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> dict[str, Any]:
+    def _prepare_batch_payload(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> Dict[str, Any]:
         """Prepare batch payload according to CloudZero AnyCost API format."""
         # Convert batch_date to month for the API (YYYY-MM format)
         try:
@@ -204,7 +204,7 @@ class CloudZeroStreamer:
 
         return payload
 
-    def _convert_cbf_to_api_format(self, row: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _convert_cbf_to_api_format(self, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Convert CBF row to CloudZero API format - keeping CBF field names as CloudZero expects them."""
         try:
             # CloudZero expects CBF format field names directly, not converted names

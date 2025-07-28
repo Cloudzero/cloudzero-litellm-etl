@@ -16,10 +16,10 @@ console = Console()
 
 def requires_database(func: Callable) -> Callable:
     """Decorator that ensures database configuration is available.
-    
+
     This decorator handles the common pattern of loading database configuration
     and displaying error messages when configuration is missing.
-    
+
     The decorated function must accept a 'db_connection' keyword argument.
     """
     @functools.wraps(func)
@@ -45,10 +45,10 @@ def requires_database(func: Callable) -> Callable:
 
 def requires_cloudzero_auth(func: Callable) -> Callable:
     """Decorator that ensures CloudZero API credentials are available.
-    
+
     This decorator handles loading CloudZero API key and connection ID
     from configuration or CLI arguments.
-    
+
     The decorated function must accept 'cz_api_key' and 'cz_connection_id' keyword arguments.
     """
     @functools.wraps(func)
@@ -85,7 +85,7 @@ def requires_cloudzero_auth(func: Callable) -> Callable:
 
 def handle_errors(func: Callable) -> Callable:
     """Decorator for consistent error handling in CLI commands.
-    
+
     Catches exceptions and displays them in a user-friendly format.
     """
     @functools.wraps(func)
@@ -110,7 +110,7 @@ def handle_errors(func: Callable) -> Callable:
 
 def with_progress(message: str = "Processing...") -> Callable:
     """Decorator that shows a progress spinner during command execution.
-    
+
     Args:
         message: Message to display with the spinner
     """

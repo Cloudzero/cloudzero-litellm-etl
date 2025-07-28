@@ -23,12 +23,12 @@ class DataSourceStrategy(ABC):
                  date_filter: Optional[Dict[str, str]] = None,
                  limit: Optional[int] = None) -> pl.DataFrame:
         """Fetch data from the specific source.
-        
+
         Args:
             database: Database connection object
             date_filter: Optional dict with 'start_date' and 'end_date' keys
             limit: Optional limit on number of records
-            
+
         Returns:
             Polars DataFrame with the fetched data
         """
@@ -113,13 +113,13 @@ class DataSourceFactory:
     @classmethod
     def create_strategy(cls, source_type: str) -> DataSourceStrategy:
         """Create a data source strategy based on source type.
-        
+
         Args:
             source_type: Type of data source ('usertable' or 'logs')
-            
+
         Returns:
             Appropriate DataSourceStrategy instance
-            
+
         Raises:
             ValueError: If source_type is not recognized
         """
@@ -135,7 +135,7 @@ class DataSourceFactory:
     @classmethod
     def register_strategy(cls, name: str, strategy_class: type[DataSourceStrategy]):
         """Register a new data source strategy.
-        
+
         Args:
             name: Name to register the strategy under
             strategy_class: Strategy class to register

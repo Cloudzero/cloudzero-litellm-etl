@@ -3,6 +3,8 @@
 
 """Database connection and data extraction for LiteLLM."""
 
+from typing import Any, Dict, Optional
+
 import polars as pl
 import psycopg
 
@@ -13,7 +15,7 @@ class LiteLLMDatabase:
     def __init__(self, connection_string: str):
         """Initialize database connection."""
         self.connection_string = connection_string
-        self._connection: psycopg.Connection | None = None
+        self._connection: Optional[psycopg.Connection] = None
 
     def connect(self) -> psycopg.Connection:
         """Establish database connection."""
@@ -21,7 +23,7 @@ class LiteLLMDatabase:
             self._connection = psycopg.connect(self.connection_string)
         return self._connection
 
-    def get_usage_data(self, limit: int | None = None) -> pl.DataFrame:
+    def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
         """Retrieve enriched usage data from LiteLLM DailyUserSpend table with API key and user lookup information."""
         # Enhanced query with user lookup tables for API key enrichment
         query = """
@@ -73,7 +75,7 @@ class LiteLLMDatabase:
         finally:
             conn.close()
 
-    def get_spend_analysis_data(self, limit: int | None = None) -> pl.DataFrame:
+    def get_spend_analysis_data(self, limit: Optional[int] = None) -> pl.DataFrame:
         """Retrieve enriched consolidated usage data from both user and team spend tables with API key and user lookup information."""
         # Enhanced union query with user lookup tables for API key enrichment
         query = """
@@ -169,7 +171,7 @@ class LiteLLMDatabase:
         finally:
             conn.close()
 
-    def get_table_info(self) -> dict:
+    def get_table_info(self) -> Dict[str, Any]:
         """Get information about the consolidated daily spend tables."""
         conn = self.connect()
         try:
@@ -205,7 +207,7 @@ class LiteLLMDatabase:
             cursor.execute(f'SELECT COUNT(*) FROM "{table_name}"')
             return cursor.fetchone()[0]
 
-    def discover_all_tables(self) -> dict:
+    def discover_all_tables(self) -> Dict[str, Any]:
         """Discover all tables in the LiteLLM database and their schemas."""
         conn = self.connect()
         try:
@@ -309,7 +311,7 @@ class LiteLLMDatabase:
         finally:
             conn.close()
 
-    def get_individual_table_data(self, table_type: str, limit: int | None = None, force_refresh: bool = False) -> pl.DataFrame:
+    def get_individual_table_data(self, table_type: str, limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
         """Get data from a specific table type (user/team/tag/logs) directly from database."""
         # Map table type to actual table name
         table_mapping = {
@@ -369,7 +371,7 @@ class LiteLLMDatabase:
         finally:
             conn.close()
 
-    def get_spend_logs_data(self, limit: int | None = None) -> pl.DataFrame:
+    def get_spend_logs_data(self, limit: Optional[int] = None) -> pl.DataFrame:
         """Retrieve transaction-level data from LiteLLM_SpendLogs table with detailed request information."""
         conn = self.connect()
         try:
@@ -415,7 +417,7 @@ class LiteLLMDatabase:
         finally:
             conn.close()
 
-    def get_spend_logs_for_analysis(self, limit: int | None = None) -> pl.DataFrame:
+    def get_spend_logs_for_analysis(self, limit: Optional[int] = None) -> pl.DataFrame:
         """Retrieve SpendLogs data enriched with org information for CZRN/CBF analysis."""
         conn = self.connect()
         try:

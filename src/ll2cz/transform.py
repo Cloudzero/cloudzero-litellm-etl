@@ -3,7 +3,7 @@
 
 """Transform LiteLLM data to CloudZero AnyCost CBF format."""
 
-from typing import Any
+from typing import Any, Dict
 
 import polars as pl
 
@@ -80,7 +80,7 @@ class CBFTransformer:
 
         return pl.DataFrame(cbf_data)
 
-    def _create_cbf_record(self, row: dict[str, Any], use_error_tracking: bool = False) -> dict[str, Any]:
+    def _create_cbf_record(self, row: Dict[str, Any], use_error_tracking: bool = False) -> Dict[str, Any]:
         """Create a single CBF record from LiteLLM daily spend row.
 
         CZRN components are mapped to supported CBF fields where possible:

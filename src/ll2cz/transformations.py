@@ -12,17 +12,16 @@ import polars as pl
 import yaml
 
 # Import the new model name extraction
-from .model_name_strategies import extract_model_name
 
 
 class ProviderNormalizer:
     """Handle provider normalization using configuration."""
-    
+
     def __init__(self, config_path: Optional[Path] = None):
         """Initialize with configuration from YAML file."""
         if config_path is None:
             config_path = Path(__file__).parent / 'config' / 'providers.yml'
-        
+
         # Load configuration
         if config_path.exists():
             with open(config_path, 'r') as f:
@@ -38,7 +37,7 @@ class ProviderNormalizer:
                 'google': 'gcp',
                 'custom': 'custom'
             }
-    
+
     def normalize(self, provider: Union[str, litellm.LlmProviders, Any]) -> str:
         """Normalize provider name."""
         # Handle enum types
@@ -46,22 +45,22 @@ class ProviderNormalizer:
             provider_str = str(provider.value).lower()
         else:
             provider_str = str(provider).lower()
-        
+
         # Check if we have an exact mapping first
         if provider_str in self.provider_mapping:
             return self.provider_mapping[provider_str]
-        
+
         # For unmapped providers, try dropping text after first "_" or "-"
         base_provider = provider_str
         for separator in ['_', '-']:
             if separator in provider_str:
                 base_provider = provider_str.split(separator)[0]
                 break
-        
+
         # Check if the base provider has a mapping
         if base_provider in self.provider_mapping:
             return self.provider_mapping[base_provider]
-        
+
         # Return the base provider or original if no separator found
         return base_provider
 
@@ -142,17 +141,17 @@ def normalize_component(component: str, allow_uppercase: bool = False) -> str:
 
 def generate_resource_id(model: str, provider: str = None) -> str:
     """Generate a consistent resource ID from model name for use as cloud-local-id in CZRN and resource/id in CBF.
-    
+
     This function creates the unique identifier for a model resource by using the actual model name
     (e.g., model_group) with colons replaced by pipes for compatibility.
-    
+
     Args:
         model: The model name/identifier from LiteLLM (e.g., "gpt-4", "us.anthropic.claude-3-haiku:0")
         provider: Optional provider name to prepend if not already in model string
-        
+
     Returns:
         A consistent resource ID with colons replaced by pipes
-        
+
     Examples:
         >>> generate_resource_id("gpt-4", "openai")
         'openai/gpt-4'
@@ -165,18 +164,18 @@ def generate_resource_id(model: str, provider: str = None) -> str:
     """
     if not model or model.strip() == '' or model == '*':
         return 'unknown/unknown'
-    
+
     model = model.strip()
-    
+
     # If provider is specified and not already in the model string, prepend it
     if provider and provider not in model and '/' not in model:
         resource_id = f"{provider}/{model}"
     else:
         resource_id = model
-    
+
     # Replace colons with pipes for CZRN compatibility
     resource_id = resource_id.replace(':', '|')
-    
+
     return resource_id
 
 
@@ -319,10 +318,10 @@ SPENDLOGS_CBF_FIELD_MAPPINGS = {
 
 def get_field_mappings(source: str = 'usertable') -> Dict[str, Dict[str, Any]]:
     """Get field mappings based on data source.
-    
+
     Args:
         source: Data source type ('usertable' or 'logs')
-        
+
     Returns:
         Dictionary containing CZRN and CBF field mappings
     """

@@ -17,7 +17,7 @@ class DateParser:
 
     def __init__(self, user_timezone: Optional[str] = None):
         """Initialize DateParser with user timezone.
-        
+
         Args:
             user_timezone: Timezone string (e.g., 'US/Eastern', 'UTC'). Defaults to UTC.
         """
@@ -25,10 +25,10 @@ class DateParser:
 
     def _parse_timezone(self, timezone_str: Optional[str]) -> zoneinfo.ZoneInfo:
         """Parse timezone string to ZoneInfo object.
-        
+
         Args:
             timezone_str: Timezone string or None
-            
+
         Returns:
             ZoneInfo object, defaults to UTC if invalid
         """
@@ -43,14 +43,14 @@ class DateParser:
 
     def parse_date_spec(self, mode: str, date_spec: Optional[str]) -> Optional[dict]:
         """Parse date specification based on mode.
-        
+
         Args:
             mode: Operation mode ('day', 'month', or 'all')
             date_spec: Date string in format DD-MM-YYYY for day mode, MM-YYYY for month mode
-            
+
         Returns:
             Dict with 'start_date', 'end_date', and 'description' keys, or None for 'all' mode
-            
+
         Raises:
             ValueError: If date_spec format is invalid
         """
@@ -67,11 +67,11 @@ class DateParser:
 
     def _parse_day_spec(self, date_spec: Optional[str], now: datetime) -> dict:
         """Parse day specification.
-        
+
         Args:
             date_spec: DD-MM-YYYY format or None for today
             now: Current datetime with timezone
-            
+
         Returns:
             Dict with date range for a single day
         """
@@ -90,11 +90,11 @@ class DateParser:
 
     def _parse_month_spec(self, date_spec: Optional[str], now: datetime) -> dict:
         """Parse month specification.
-        
+
         Args:
             date_spec: MM-YYYY format or None for current month
             now: Current datetime with timezone
-            
+
         Returns:
             Dict with date range for entire month
         """
@@ -122,15 +122,15 @@ class DateParser:
 
     def parse_timestamp(self, timestamp_str: str) -> datetime:
         """Parse timestamp string and convert to UTC.
-        
+
         Handles various ISO 8601 formats and assumes user timezone if no timezone info provided.
-        
+
         Args:
             timestamp_str: Timestamp string to parse
-            
+
         Returns:
             datetime object in UTC timezone
-            
+
         Raises:
             ValueError: If timestamp cannot be parsed
         """
@@ -155,13 +155,13 @@ class DateParser:
 
     def parse_date(self, date_value: Union[str, datetime, None]) -> Optional[datetime]:
         """Parse date from various formats into datetime object.
-        
+
         Handles date strings in YYYY-MM-DD format, ISO 8601 timestamps,
         existing datetime objects, and None values.
-        
+
         Args:
             date_value: Date in string format, datetime object, or None
-            
+
         Returns:
             Parsed datetime object with UTC timezone or None
         """
@@ -194,11 +194,11 @@ class DateParser:
 
 def get_date_range(start_date: str, end_date: str) -> Tuple[datetime, datetime]:
     """Convert date strings to datetime range.
-    
+
     Args:
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
-        
+
     Returns:
         Tuple of (start_datetime, end_datetime) with UTC timezone
     """

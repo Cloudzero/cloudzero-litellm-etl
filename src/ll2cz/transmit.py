@@ -25,7 +25,7 @@ class DataTransmitter:
     def __init__(self, database: Union[LiteLLMDatabase, CachedLiteLLMDatabase],
                  cz_api_key: str, cz_connection_id: str, timezone: str = 'UTC'):
         """Initialize transmitter with database connection and CloudZero credentials.
-        
+
         Args:
             database: LiteLLM database connection (cached or direct)
             cz_api_key: CloudZero API key
@@ -43,7 +43,7 @@ class DataTransmitter:
                  source: str = 'usertable', append: bool = False,
                  test: bool = False, limit: Optional[int] = None) -> Dict[str, Any]:
         """Transmit data to CloudZero AnyCost API.
-        
+
         Args:
             mode: Transmission mode ('day', 'month', or 'all')
             date_spec: Date specification (DD-MM-YYYY for day, MM-YYYY for month)
@@ -51,7 +51,7 @@ class DataTransmitter:
             append: Use 'sum' operation instead of 'replace_hourly'
             test: Test mode - show payloads without transmitting
             limit: Number of records to send or show (in test mode)
-            
+
         Returns:
             Dictionary with transmission results
         """
@@ -91,11 +91,11 @@ class DataTransmitter:
             self.console.print("[dim]Using chunked processing for large dataset...[/dim]")
             processor = DataProcessor(source=source)
             chunked_processor = ChunkedDataProcessor(chunk_size=10000, show_progress=True)
-            
+
             all_cbf_records = []
             def collect_results(cbf_records, error_summary):
                 all_cbf_records.extend(cbf_records)
-            
+
             _, _, error_summary = chunked_processor.process_dataframe_chunked(
                 data, processor, callback=collect_results
             )
@@ -115,7 +115,7 @@ class DataTransmitter:
 
     def _display_test_payloads(self, cbf_data: pl.DataFrame, operation: str, mode: str) -> Dict[str, Any]:
         """Display test payloads without transmitting.
-        
+
         Returns:
             Dictionary with test results
         """
@@ -169,7 +169,7 @@ class DataTransmitter:
 
     def _transmit_data(self, cbf_data: pl.DataFrame, operation: str) -> Dict[str, Any]:
         """Transmit data to CloudZero AnyCost API.
-        
+
         Returns:
             Dictionary with transmission results
         """

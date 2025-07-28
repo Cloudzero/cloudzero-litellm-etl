@@ -7,7 +7,7 @@ import hashlib
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import polars as pl
 from rich.console import Console
@@ -115,7 +115,7 @@ class DataCache:
         finally:
             conn.close()
 
-    def _check_server_freshness(self, database: LiteLLMDatabase) -> dict[str, Any]:
+    def _check_server_freshness(self, database: LiteLLMDatabase) -> Dict[str, Any]:
         """Check if server data has changed since last cache update."""
         try:
             # Get current server table info
@@ -163,7 +163,7 @@ class DataCache:
                 'server_available': False
             }
 
-    def _is_cache_fresh(self, connection_string: str, server_stats: dict[str, Any]) -> bool:
+    def _is_cache_fresh(self, connection_string: str, server_stats: Dict[str, Any]) -> bool:
         """Check if cached data is still fresh compared to server."""
         if server_stats.get('server_available', True) is False:
             # Server unavailable, consider cache fresh (offline mode)
@@ -346,7 +346,7 @@ class DataCache:
     def get_cached_data(self, database: Optional[LiteLLMDatabase], connection_string: str,
                        limit: Optional[int] = None, force_refresh: bool = False) -> pl.DataFrame:
         """Get data from cache, refreshing if necessary.
-        
+
         Note: force_refresh is kept for internal use by the refresh_cache command.
         Users should use 'cache refresh' command to update cache."""
 
@@ -394,7 +394,7 @@ class DataCache:
         finally:
             conn.close()
 
-    def get_cache_info(self, connection_string: str) -> dict[str, Any]:
+    def get_cache_info(self, connection_string: str) -> Dict[str, Any]:
         """Get information about cached data."""
         conn_hash = self._get_connection_hash(connection_string)
 

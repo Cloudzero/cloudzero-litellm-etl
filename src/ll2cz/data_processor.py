@@ -49,7 +49,7 @@ class DataProcessor:
         self.cbf_mappings = mappings['cbf']
         self.czrn_constants = mappings['czrn_constants']
         self.cbf_constants = mappings['cbf_constants']
-        
+
         # Set field names based on source
         if source == "logs":
             self.resource_type_field = "call_type"

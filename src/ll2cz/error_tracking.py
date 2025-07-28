@@ -12,8 +12,8 @@ from rich.box import SIMPLE
 from rich.console import Console
 from rich.table import Table
 
+from .model_name_strategies import extract_model_name
 from .transformations import (
-    extract_model_name,
     generate_resource_id,
     normalize_component,
     normalize_service,
