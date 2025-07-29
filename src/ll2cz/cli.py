@@ -18,7 +18,7 @@ from .cbf_transformer import CBFTransformer
 from .config import Config
 from .database import LiteLLMDatabase
 from .output import CSVWriter
-from .transmit import DataTransmitter
+from .transmit_refactored import DataTransmitterV2 as DataTransmitter
 
 console = Console()
 
@@ -320,14 +320,44 @@ def transmit(args):
             timezone=args.timezone or 'UTC'
         )
 
-        transmitter.transmit(
-            mode=args.mode,
-            date_spec=args.date,
+        # Map CLI modes to transmit modes
+        mode_mapping = {
+            'today': 'day',
+            'yesterday': 'day',
+            'date-range': 'day',  # Will be handled by date_spec
+            'all': 'all'
+        }
+        transmit_mode = mode_mapping.get(args.mode, args.mode)
+        
+        # Handle date specification based on mode
+        date_spec = args.date
+        if args.mode == 'today':
+            from datetime import datetime
+            date_spec = datetime.now().strftime('%d-%m-%Y')
+        elif args.mode == 'yesterday':
+            from datetime import datetime, timedelta
+            date_spec = (datetime.now() - timedelta(days=1)).strftime('%d-%m-%Y')
+        elif args.mode == 'date-range' and args.date and ':' in args.date:
+            # Convert date range format
+            start_date, end_date = args.date.split(':')
+            # For now, just use the start date in day format
+            # TODO: Implement proper date range support
+            from datetime import datetime
+            dt = datetime.strptime(start_date, '%Y-%m-%d')
+            date_spec = dt.strftime('%d-%m-%Y')
+
+        result = transmitter.transmit(
+            mode=transmit_mode,
+            date_spec=date_spec,
             source=args.source,
             append=args.append,
             test=args.test,
             limit=args.records
         )
+        # Check if the transmission failed
+        if isinstance(result, dict) and result.get('status') == 'error':
+            # Error message already shown by transmitter
+            sys.exit(1)
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

@@ -31,18 +31,24 @@ ll2cz transform [OPTIONS]
 ```
 
 ### Options
-- `--input TEXT` - LiteLLM PostgreSQL database connection URL
+- `--input TEXT` - LiteLLM database connection URL (PostgreSQL or SQLite)
 - `--output TEXT` - Output CSV file name  
 - `--screen` - Display transformed data on screen in formatted table
 - `--limit INTEGER` - Limit number of records for screen output (default: 50)
 
 ### Examples
 ```bash
-# Display data on screen (formatted table)
+# Display data on screen (formatted table) - PostgreSQL
 ll2cz transform --input "postgresql://user:pass@host:5432/litellm_db" --screen
 
-# Export to CSV file
+# Display data on screen - SQLite
+ll2cz transform --input "sqlite://path/to/litellm.sqlite" --screen
+
+# Export to CSV file - PostgreSQL
 ll2cz transform --input "postgresql://user:pass@host:5432/litellm_db" --output data.csv
+
+# Export to CSV file - SQLite
+ll2cz transform --input "sqlite://test.sqlite" --output data.csv
 
 # Limit records for screen display
 ll2cz transform --screen --limit 25
@@ -69,7 +75,7 @@ ll2cz transmit [OPTIONS] MODE [DATE_SPEC]
   - For `all` mode: ignored
 
 ### Options
-- `--input TEXT` - LiteLLM PostgreSQL database connection URL
+- `--input TEXT` - LiteLLM database connection URL (PostgreSQL or SQLite)
 - `--cz-api-key TEXT` - CloudZero API key
 - `--cz-connection-id TEXT` - CloudZero connection ID
 - `--append` - Use 'sum' operation instead of 'replace_hourly'
@@ -127,6 +133,20 @@ ll2cz transmit day --test
 
 # Test specific month with API keys still required
 ll2cz transmit month 01-2024 --test --cz-api-key "key" --cz-connection-id "id"
+
+# Test with SQLite database
+ll2cz transmit all --test --input "sqlite://test.sqlite"
+```
+
+### Database Support
+Both PostgreSQL and SQLite databases are supported:
+
+```bash
+# PostgreSQL
+ll2cz transmit all --input "postgresql://user:pass@host:5432/litellm_db"
+
+# SQLite
+ll2cz transmit all --input "sqlite://path/to/database.sqlite"
 ```
 
 ---

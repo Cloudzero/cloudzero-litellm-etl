@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2025-01-29
+
+### Added
+- **Transmit module refactoring** for improved maintainability and testability
+  - Split monolithic `DataTransmitter` into focused components with single responsibilities
+  - Introduced dependency injection for all components
+  - Created protocol-based design with `OutputHandler` and `Transmitter` interfaces
+  - Added test-friendly implementations: `NullOutput`, `MockTransmitter`, `CollectingOutput`
+  - Comprehensive test suite with 27 new tests demonstrating improved testability
+  - Full backward compatibility maintained
+- **CI/CD safe smoke tests** for all CLI commands
+  - Updated smoke tests to not require real database connections
+  - All tests now safe for automated CI/CD pipelines
+- **PII obfuscation in test data**
+  - Anonymized all names, emails, and API keys in test.sqlite
+  - Updated create_test_sqlite.py script to generate only anonymized test data
+  - Reviewed entire codebase to ensure no PII is present
+
+### Changed
+- Updated CLI to use refactored transmit module (`transmit_refactored.py`)
+- Fixed CLI error handling to properly exit with error code when transmit fails
+- Improved BatchAnalyzer to correctly group data by date in refactored transmit module
+
+### Fixed
+- Fixed date filtering in SQLite implementation for data source strategies
+- Fixed CLI mode mapping to correctly handle 'today', 'yesterday', 'date-range' modes
+
+### Testing
+- All 97 tests passing including new refactored transmit tests
+- SQLite integration fully tested with transmit functionality
+- All smoke tests are now CI/CD safe
+
 ## [0.6.1] - 2025-01-28
 
 ### Fixed
@@ -14,14 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `__main__.py` to enable running package as module: `python -m ll2cz`
 
 ### Added
+- **SQLite database support** - All commands now accept `sqlite://` connection strings
 - Comprehensive import tests (`test_imports.py`) to prevent future import errors
 - CLI smoke tests (`test_cli_smoke.py`) to ensure all commands work without crashing
 - Tests for all critical imports and circular dependency detection
+- `scripts/create_test_sqlite.py` to generate test SQLite databases with sample data
+- SQLite-specific tests (`test_sqlite.py`) for database functionality
 
 ### Testing
 - Verified all CLI commands work correctly: `transmit`, `analyze`, `transform`, `cache`, `config`
 - All 21 core tests passing
-- All 16 new import and smoke tests passing
+- All 24 new tests passing (import, smoke, and SQLite tests)
+- SQLite support tested with both test databases and production-like schemas
 
 ## [0.6.0] - 2025-01-28
 

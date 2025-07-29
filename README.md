@@ -4,10 +4,11 @@ Transform LiteLLM database data into CloudZero AnyCost CBF format for cost track
 
 ## Features
 
-- Extract usage data from LiteLLM PostgreSQL database
+- Extract usage data from LiteLLM PostgreSQL or SQLite database
 - Transform data into CloudZero Billing Format (CBF)
 - **Cost comparison analysis** between SpendLogs and user tables (v0.4.0+)
 - **Dual data source support** with `--source` option: transaction-level SpendLogs or daily aggregated user tables
+- **SQLite support** for testing and offline analysis (v0.6.1+)
 - Analysis mode with beautiful terminal output using Rich
 - Multiple output options: CSV files or direct CloudZero API streaming
 - Built with modern Python tools: uv, ruff, pytest, polars, httpx
@@ -84,8 +85,11 @@ ll2cz config edit        # Interactively edit configuration
 Transform LiteLLM data to CloudZero CBF format:
 
 ```bash
-# Display data on screen (formatted table)
+# Display data on screen (formatted table) - PostgreSQL
 ll2cz transform --input "postgresql://user:pass@host:5432/litellm_db" --screen
+
+# Display data on screen - SQLite
+ll2cz transform --input "sqlite://path/to/litellm.sqlite" --screen
 
 # Export to CSV file
 ll2cz transform --input "postgresql://user:pass@host:5432/litellm_db" --output data.csv
@@ -219,10 +223,28 @@ uv run ruff check --fix src/ tests/
 uv build
 ```
 
+## Testing with SQLite
+
+For testing and development, you can use SQLite instead of PostgreSQL:
+
+```bash
+# Create a test SQLite database with sample data
+python scripts/create_test_sqlite.py
+
+# Use the test database
+ll2cz transmit all --test --input "sqlite://test.sqlite"
+```
+
+The test database includes:
+- Sample organizations, teams, and users
+- API keys with realistic naming
+- 30 days of usage data
+- Multiple model providers (OpenAI, Anthropic, etc.)
+
 ## Requirements
 
 - Python ≥ 3.12
-- PostgreSQL database with LiteLLM data
+- PostgreSQL or SQLite database with LiteLLM data
 - CloudZero API key and connection ID (for streaming mode)
 
 ## License

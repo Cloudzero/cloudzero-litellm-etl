@@ -54,11 +54,20 @@ class UserTableStrategy(DataSourceStrategy):
         """Fetch data from user table with optional filtering."""
         if date_filter:
             console.print(f"[blue]Fetching {date_filter['description']} from user table...[/blue]")
-            return database.get_usage_data(
-                start_date=date_filter['start_date'],
-                end_date=date_filter['end_date'],
-                limit=limit
-            )
+            # Since get_usage_data doesn't support date filtering, we'll fetch all data
+            # and filter it afterwards
+            console.print("[dim]Note: Date filtering will be applied after fetching data[/dim]")
+            data = database.get_usage_data(limit=limit)
+            
+            # Apply date filter on the DataFrame
+            if not data.is_empty() and 'date' in data.columns:
+                start_date = date_filter['start_date']
+                end_date = date_filter['end_date']
+                # Filter by date range
+                data = data.filter(
+                    (pl.col('date') >= start_date) & (pl.col('date') <= end_date)
+                )
+            return data
         else:
             console.print("[blue]Fetching all data from user table...[/blue]")
             return database.get_usage_data(limit=limit)

@@ -123,7 +123,7 @@ class DataTransmitter:
 
         # Group by date for batching
         date_groups = cbf_data.group_by('time/usage_start').agg(
-            pl.count().alias('record_count')
+            pl.len().alias('record_count')
         ).sort('time/usage_start')
 
         self.console.print(f"\n[blue]Would send {len(date_groups)} batches:[/blue]")
